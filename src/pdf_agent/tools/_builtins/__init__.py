@@ -10,10 +10,32 @@ def get_builtin_tools() -> list[BaseTool]:
     from pdf_agent.tools._builtins.split import SplitTool
     from pdf_agent.tools._builtins.rotate import RotateTool
     from pdf_agent.tools._builtins.metadata_info import MetadataInfoTool
+    from pdf_agent.tools._builtins.extract import ExtractTool
+    from pdf_agent.tools._builtins.delete import DeleteTool
+    from pdf_agent.tools._builtins.reorder import ReorderTool
+    from pdf_agent.tools._builtins.encrypt import EncryptTool
+    from pdf_agent.tools._builtins.decrypt import DecryptTool
+    from pdf_agent.tools._builtins.watermark_text import WatermarkTextTool
+    from pdf_agent.tools._builtins.add_page_numbers import AddPageNumbersTool
+    from pdf_agent.tools._builtins.images_to_pdf import ImagesToPdfTool
+    from pdf_agent.tools._builtins.compress import CompressTool
+    from pdf_agent.tools._builtins.ocr import OcrTool
+    from pdf_agent.tools._builtins.pdf_to_images import PdfToImagesTool
 
     return [
         MergeTool(),
         SplitTool(),
         RotateTool(),
         MetadataInfoTool(),
+        ExtractTool(),
+        DeleteTool(),
+        ReorderTool(),
+        EncryptTool(),
+        DecryptTool(),
+        WatermarkTextTool(),
+        AddPageNumbersTool(),
+        ImagesToPdfTool(),
+        CompressTool(),
+        OcrTool(),
+        PdfToImagesTool(),
     ]
