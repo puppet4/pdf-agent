@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual env
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Data (local storage)
+data/uploads/*
+data/jobs/*
+!data/uploads/.gitkeep
+!data/jobs/.gitkeep
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+
+
+.claude
