@@ -165,7 +165,7 @@ class TestPathsToDownloadUrls:
     def test_converts_paths(self):
         from pdf_agent.api.agent import _paths_to_download_urls
         urls = _paths_to_download_urls("t1", ["/data/threads/t1/step_0/out.pdf"])
-        assert urls == ["/api/agent/threads/t1/files/out.pdf"]
+        assert urls == ["/api/agent/threads/t1/files/step_0/out.pdf"]
 
     def test_empty_paths(self):
         from pdf_agent.api.agent import _paths_to_download_urls

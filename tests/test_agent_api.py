@@ -24,6 +24,112 @@ def client(app):
     return TestClient(app)
 
 
+# ---------------------------------------------------------------------------
+# Middleware tests
+# ---------------------------------------------------------------------------
+
+class TestApiKeyMiddleware:
+    def test_no_auth_when_api_key_unset(self, client, app):
+        """When api_key is empty, all requests pass through."""
+        from pdf_agent.config import settings
+        original = settings.api_key
+        settings.api_key = ""
+        try:
+            app.state.graph = None  # triggers 503, not 401
+            resp = client.post("/api/agent/chat", json={"message": "test"})
+            assert resp.status_code == 503  # got through auth, hit graph=None
+        finally:
+            settings.api_key = original
+
+    def test_rejects_missing_key(self, client):
+        """When api_key is set, requests without key get 401."""
+        from pdf_agent.config import settings
+        original = settings.api_key
+        settings.api_key = "secret-key-123"
+        try:
+            resp = client.post("/api/agent/chat", json={"message": "test"})
+            assert resp.status_code == 401
+        finally:
+            settings.api_key = original
+
+    def test_accepts_valid_key_header(self, client, app):
+        """Valid X-API-Key header passes auth."""
+        from pdf_agent.config import settings
+        original = settings.api_key
+        settings.api_key = "secret-key-123"
+        try:
+            app.state.graph = None
+            resp = client.post(
+                "/api/agent/chat",
+                json={"message": "test"},
+                headers={"X-API-Key": "secret-key-123"},
+            )
+            assert resp.status_code == 503  # passed auth, hit graph=None
+        finally:
+            settings.api_key = original
+
+    def test_healthz_skips_auth(self):
+        """Public paths like /healthz skip authentication."""
+        from pdf_agent.config import settings
+        from pdf_agent.main import app as _app
+        original = settings.api_key
+        settings.api_key = "secret-key-123"
+        try:
+            c = TestClient(_app)
+            resp = c.get("/healthz")
+            assert resp.status_code == 200
+        finally:
+            settings.api_key = original
+
+
+class TestRateLimitMiddleware:
+    def test_rate_limit_blocks_excess(self, client, app):
+        """Exceeding rate_limit_rpm returns 429."""
+        from pdf_agent.config import settings
+        from pdf_agent.api.middleware import RateLimitMiddleware
+        original_rpm = settings.rate_limit_rpm
+        settings.rate_limit_rpm = 2
+
+        # Reset rate limiter state from prior tests
+        if RateLimitMiddleware._instance:
+            RateLimitMiddleware._instance.reset()
+
+        async def mock_stream(*args, **kwargs):
+            return
+            yield
+
+        app.state.graph.astream_events = mock_stream
+
+        try:
+            for _ in range(2):
+                resp = client.post("/api/agent/chat", json={"message": "test"})
+                assert resp.status_code == 200
+            # Third request should be rate limited
+            resp = client.post("/api/agent/chat", json={"message": "test"})
+            assert resp.status_code == 429
+        finally:
+            settings.rate_limit_rpm = original_rpm
+
+    def test_rate_limit_disabled(self, client, app):
+        """When rate_limit_rpm=0, no rate limiting."""
+        from pdf_agent.config import settings
+        original_rpm = settings.rate_limit_rpm
+        settings.rate_limit_rpm = 0
+
+        async def mock_stream(*args, **kwargs):
+            return
+            yield
+
+        app.state.graph.astream_events = mock_stream
+
+        try:
+            for _ in range(5):
+                resp = client.post("/api/agent/chat", json={"message": "test"})
+                assert resp.status_code == 200
+        finally:
+            settings.rate_limit_rpm = original_rpm
+
+
 class TestChatEndpoint:
     def test_returns_sse_stream(self, client, app):
         """Test that POST /api/agent/chat returns an SSE stream."""
@@ -120,7 +226,7 @@ class TestChatEndpoint:
             if line.startswith("data:") and "tool_end" not in line and "rotated" in line:
                 data = json.loads(line[5:].strip())
                 if "files" in data:
-                    assert data["files"][0] == "/api/agent/threads/t1/files/rotated.pdf"
+                    assert data["files"][0] == "/api/agent/threads/t1/files/step_0/rotated.pdf"
                     break
 
 
@@ -130,7 +236,7 @@ class TestThreadFilesEndpoint:
         assert response.status_code == 404
 
     def test_download_404_for_unknown_thread(self, client):
-        response = client.get("/api/agent/threads/nonexistent/files/test.pdf")
+        response = client.get("/api/agent/threads/nonexistent/files/step_0/test.pdf")
         assert response.status_code == 404
 
     def test_list_files_returns_download_urls(self, client, tmp_path):
@@ -147,7 +253,7 @@ class TestThreadFilesEndpoint:
             assert response.status_code == 200
             data = response.json()
             assert len(data["files"]) == 1
-            assert data["files"][0]["download_url"] == f"/api/agent/threads/{thread_id}/files/output.pdf"
+            assert data["files"][0]["download_url"] == f"/api/agent/threads/{thread_id}/files/step_0/output.pdf"
             assert "path" not in data["files"][0]  # no raw path exposed
         finally:
             import shutil

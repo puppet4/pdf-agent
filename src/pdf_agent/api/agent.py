@@ -1,8 +1,11 @@
-"""Agent API — SSE streaming chat + file access."""
+"""Agent API — SSE streaming chat + file access + thread management."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -22,6 +25,9 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 # Keys to strip from tool_start args (injected by our tool node, not user-facing)
 _INTERNAL_KEYS = {"state", "tool_call_id"}
+
+# Heartbeat interval during tool execution (seconds)
+_HEARTBEAT_INTERVAL = 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -72,11 +78,16 @@ def _sanitize_tool_args(args: dict) -> dict:
 
 
 def _paths_to_download_urls(thread_id: str, file_paths: list[str]) -> list[str]:
-    """Convert absolute file paths to API download URLs."""
+    """Convert absolute file paths to API download URLs.
+
+    Encodes step directory into the URL to avoid filename collisions:
+    /api/agent/threads/{thread_id}/files/{step}/{filename}
+    """
     urls = []
     for fp in file_paths:
-        filename = Path(fp).name
-        urls.append(f"/api/agent/threads/{thread_id}/files/{filename}")
+        p = Path(fp)
+        step = p.parent.name  # e.g. "step_0"
+        urls.append(f"/api/agent/threads/{thread_id}/files/{step}/{p.name}")
     return urls
 
 
@@ -95,7 +106,7 @@ def _extract_output_files(output: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# SSE Chat endpoint
+# SSE Chat endpoint (with heartbeat progress)
 # ---------------------------------------------------------------------------
 
 @router.post("/chat")
@@ -129,8 +140,26 @@ async def chat(req: ChatRequest, request: Request):
     async def event_stream():
         yield _sse_event("thread", {"thread_id": thread_id})
 
+        tool_active = None
+        tool_start_time = None
+
         try:
-            async for event in graph.astream_events(input_state, config=config, version="v2"):
+            aiter = graph.astream_events(input_state, config=config, version="v2").__aiter__()
+            while True:
+                try:
+                    event = await asyncio.wait_for(aiter.__anext__(), timeout=_HEARTBEAT_INTERVAL)
+                except asyncio.TimeoutError:
+                    # Emit heartbeat while tool is running
+                    if tool_active and tool_start_time:
+                        elapsed = time.time() - tool_start_time
+                        yield _sse_event("tool_progress", {
+                            "tool": tool_active,
+                            "elapsed_seconds": round(elapsed, 1),
+                        })
+                    continue
+                except StopAsyncIteration:
+                    break
+
                 kind = event["event"]
 
                 # LLM token streaming
@@ -139,16 +168,19 @@ async def chat(req: ChatRequest, request: Request):
                     if chunk.content:
                         yield _sse_event("token", {"content": chunk.content})
 
-                # Tool start — filter out internal keys
+                # Tool start
                 elif kind == "on_tool_start":
+                    tool_active = event["name"]
+                    tool_start_time = time.time()
                     raw_args = event["data"].get("input", {})
                     yield _sse_event("tool_start", {
                         "tool": event["name"],
                         "args": _sanitize_tool_args(raw_args) if isinstance(raw_args, dict) else {},
                     })
 
-                # Tool end — convert paths to download URLs
+                # Tool end — convert paths to download URLs, include elapsed time
                 elif kind == "on_tool_end":
+                    elapsed = time.time() - tool_start_time if tool_start_time else 0
                     output = event["data"].get("output", "")
                     file_paths = _extract_output_files(output)
                     download_urls = _paths_to_download_urls(thread_id, file_paths)
@@ -156,7 +188,10 @@ async def chat(req: ChatRequest, request: Request):
                         "tool": event["name"],
                         "output": str(output)[:500],
                         "files": download_urls,
+                        "elapsed_seconds": round(elapsed, 1),
                     })
+                    tool_active = None
+                    tool_start_time = None
 
         except Exception as e:
             logger.exception("Agent stream error")
@@ -176,11 +211,11 @@ async def chat(req: ChatRequest, request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Thread file endpoints
+# Thread file endpoints (step-aware to avoid collisions)
 # ---------------------------------------------------------------------------
 
 @router.get("/threads/{thread_id}/files")
-async def list_thread_files(thread_id: str, request: Request):
+async def list_thread_files(thread_id: str):
     """List all output files in a thread's workdir."""
     thread_dir = settings.threads_dir / thread_id
     if not thread_dir.exists():
@@ -195,23 +230,96 @@ async def list_thread_files(thread_id: str, request: Request):
                         "step": step_dir.name,
                         "filename": f.name,
                         "size_bytes": f.stat().st_size,
-                        "download_url": f"/api/agent/threads/{thread_id}/files/{f.name}",
+                        "download_url": f"/api/agent/threads/{thread_id}/files/{step_dir.name}/{f.name}",
                     })
     return {"thread_id": thread_id, "files": files}
 
 
-@router.get("/threads/{thread_id}/files/{filename}")
-async def download_thread_file(thread_id: str, filename: str):
-    """Download a specific file from a thread by searching all step dirs."""
+@router.get("/threads/{thread_id}/files/{step}/{filename}")
+async def download_thread_file(thread_id: str, step: str, filename: str):
+    """Download a specific file from a thread's step directory."""
     thread_dir = settings.threads_dir / thread_id
     if not thread_dir.exists():
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    # Search step dirs for the file (reverse order — latest first)
-    for step_dir in sorted(thread_dir.iterdir(), reverse=True):
-        if step_dir.is_dir():
-            candidate = step_dir / filename
-            if candidate.is_file():
-                return FileResponse(candidate, filename=filename)
+    candidate = thread_dir / step / filename
+    if candidate.is_file():
+        return FileResponse(candidate, filename=filename)
 
-    raise HTTPException(status_code=404, detail=f"File '{filename}' not found in thread")
+    raise HTTPException(status_code=404, detail=f"File '{step}/{filename}' not found in thread")
+
+
+# ---------------------------------------------------------------------------
+# Thread management endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/threads")
+async def list_threads():
+    """List all conversation threads."""
+    threads_dir = settings.threads_dir
+    if not threads_dir.exists():
+        return {"threads": []}
+
+    threads = []
+    for entry in sorted(threads_dir.iterdir(), key=lambda e: e.stat().st_mtime, reverse=True):
+        if entry.is_dir():
+            stat = entry.stat()
+            step_count = sum(1 for d in entry.iterdir() if d.is_dir() and d.name.startswith("step_"))
+            threads.append({
+                "thread_id": entry.name,
+                "created_at": stat.st_ctime,
+                "updated_at": stat.st_mtime,
+                "step_count": step_count,
+            })
+    return {"threads": threads}
+
+
+@router.get("/threads/{thread_id}")
+async def get_thread(thread_id: str, request: Request):
+    """Get thread details including conversation history from checkpointer."""
+    thread_dir = settings.threads_dir / thread_id
+    if not thread_dir.exists():
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Get conversation history from checkpointer
+    graph = request.app.state.graph
+    messages = []
+    if graph is not None:
+        try:
+            config = {"configurable": {"thread_id": thread_id}}
+            state = await graph.aget_state(config)
+            if state and state.values:
+                for msg in state.values.get("messages", []):
+                    msg_data = {"type": msg.type, "content": ""}
+                    if hasattr(msg, "content"):
+                        content = msg.content
+                        msg_data["content"] = content if isinstance(content, str) else str(content)
+                    if hasattr(msg, "tool_calls") and msg.tool_calls:
+                        msg_data["tool_calls"] = [
+                            {"name": tc["name"], "args": tc["args"]}
+                            for tc in msg.tool_calls
+                        ]
+                    if hasattr(msg, "name") and msg.name:
+                        msg_data["name"] = msg.name
+                    messages.append(msg_data)
+        except Exception:
+            logger.warning("Failed to load thread state for %s", thread_id)
+
+    stat = thread_dir.stat()
+    return {
+        "thread_id": thread_id,
+        "created_at": stat.st_ctime,
+        "updated_at": stat.st_mtime,
+        "messages": messages,
+    }
+
+
+@router.delete("/threads/{thread_id}")
+async def delete_thread(thread_id: str):
+    """Delete a thread and its workdir."""
+    thread_dir = settings.threads_dir / thread_id
+    if not thread_dir.exists():
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    shutil.rmtree(thread_dir)
+    return {"deleted": True, "thread_id": thread_id}

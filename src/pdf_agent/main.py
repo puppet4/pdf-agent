@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from psycopg_pool import AsyncConnectionPool
 
 from pdf_agent.config import settings
@@ -36,6 +39,16 @@ async def _cleanup_loop():
             logger.exception("Thread cleanup failed")
 
 
+def _setup_langsmith():
+    """Configure LangSmith tracing via environment variables if API key is set."""
+    if not settings.langsmith_api_key:
+        return
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+    os.environ.setdefault("LANGCHAIN_API_KEY", settings.langsmith_api_key)
+    os.environ.setdefault("LANGCHAIN_PROJECT", settings.langsmith_project)
+    logger.info("LangSmith tracing enabled (project=%s)", settings.langsmith_project)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -47,6 +60,9 @@ async def lifespan(app: FastAPI):
             "PDF_AGENT_OPENAI_API_KEY is not set. "
             "Please set it via environment variable or .env file."
         )
+
+    # Setup LangSmith before loading graph
+    _setup_langsmith()
 
     load_builtin_tools()
     logger.info("Loaded %d tools", len(registry))
@@ -92,7 +108,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS (permissive for local/dev use)
+# Middleware (order matters: first added = outermost)
+from pdf_agent.api.middleware import ApiKeyMiddleware, RateLimitMiddleware
+
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(ApiKeyMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -103,6 +123,11 @@ app.add_middleware(
 
 # Include all API routes
 app.include_router(api_router)
+
+# Serve frontend static files
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_static_dir), html=True), name="static")
 
 
 # Global error handler for PDFAgentError
