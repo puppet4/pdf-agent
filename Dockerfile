@@ -1,29 +1,49 @@
-FROM python:3.13-slim
+# ── Stage 1: Build ──
+FROM python:3.13-slim AS builder
 
-# Install system dependencies for PDF processing
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    qpdf \
-    poppler-utils \
-    ghostscript \
-    tesseract-ocr \
-    tesseract-ocr-chi-sim \
-    tesseract-ocr-eng \
-    ocrmypdf \
-    && rm -rf /var/lib/apt/lists/*
+    build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
+COPY pyproject.toml ./
+RUN uv pip install --system --no-cache ".[dev]"
 
-# Install Python dependencies
-COPY pyproject.toml .
-RUN pip install --no-cache-dir .
-
-# Copy application
 COPY src/ src/
-COPY alembic.ini .
-COPY alembic/ alembic/
+RUN uv pip install --system --no-cache --no-deps -e .
 
-# Create data directories
-RUN mkdir -p data/uploads data/jobs
+# ── Stage 2: Runtime ──
+FROM python:3.13-slim AS runtime
+
+# External tools required by subprocess-based PDF tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    qpdf \
+    ghostscript \
+    ocrmypdf \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-chi-sim \
+    libreoffice-writer-nogui \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python environment from builder
+COPY --from=builder /usr/local/lib/python3.13 /usr/local/lib/python3.13
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+WORKDIR /app
+COPY --from=builder /app /app
+COPY alembic/ alembic/
+COPY alembic.ini .
+
+# Create non-root user
+RUN groupadd -r pdfagent && useradd -r -g pdfagent -d /app pdfagent && \
+    mkdir -p /app/data && chown -R pdfagent:pdfagent /app/data
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
 
 EXPOSE 8000
 

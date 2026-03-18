@@ -1,4 +1,4 @@
-"""Integration tests for Phase 1 tools."""
+"""Integration tests for built-in tools."""
 from __future__ import annotations
 
 import shutil
@@ -13,11 +13,16 @@ from pdf_agent.tools._builtins.reorder import ReorderTool
 from pdf_agent.tools._builtins.encrypt import EncryptTool
 from pdf_agent.tools._builtins.decrypt import DecryptTool
 from pdf_agent.tools._builtins.watermark_text import WatermarkTextTool
+from pdf_agent.tools._builtins.watermark_image import WatermarkImageTool
 from pdf_agent.tools._builtins.add_page_numbers import AddPageNumbersTool
 from pdf_agent.tools._builtins.images_to_pdf import ImagesToPdfTool
 from pdf_agent.tools._builtins.compress import CompressTool
 from pdf_agent.tools._builtins.ocr import OcrTool
 from pdf_agent.tools._builtins.pdf_to_images import PdfToImagesTool
+from pdf_agent.tools._builtins.crop import CropTool
+from pdf_agent.tools._builtins.resize import ResizeTool
+from pdf_agent.tools._builtins.pdf_to_text import PdfToTextTool
+from pdf_agent.tools._builtins.flatten import FlattenTool
 
 
 # ────────────────────── Batch 1: Pure pikepdf ──────────────────────
@@ -195,6 +200,88 @@ class TestPdfToImagesTool:
         assert len(result.output_files) == 2
 
 
+# ────────────────────── Phase 2: Page editing tools ──────────────────────
+
+
+class TestCropTool:
+    def test_crop(self, sample_pdf: Path, workdir: Path):
+        tool = CropTool()
+        result = tool.run([sample_pdf], {"top": "50", "bottom": "50", "left": "30", "right": "30"}, workdir)
+        assert result.output_files[0].exists()
+        with pikepdf.open(result.output_files[0]) as pdf:
+            assert len(pdf.pages) == 5
+            mbox = pdf.pages[0].mediabox
+            # Original was 612x792, after crop should be 552x692
+            assert abs(float(mbox[2] - mbox[0]) - 552) < 1
+            assert abs(float(mbox[3] - mbox[1]) - 692) < 1
+
+    def test_crop_specific_pages(self, sample_pdf: Path, workdir: Path):
+        tool = CropTool()
+        result = tool.run([sample_pdf], {"top": "50", "page_range": "1,3"}, workdir)
+        assert result.meta["cropped_pages"] == 2
+
+    def test_crop_too_large(self, sample_pdf: Path, workdir: Path):
+        tool = CropTool()
+        with pytest.raises(Exception, match="too large"):
+            tool.run([sample_pdf], {"left": "400", "right": "400"}, workdir)
+
+
+class TestResizeTool:
+    def test_resize_to_a5(self, sample_pdf: Path, workdir: Path):
+        tool = ResizeTool()
+        result = tool.run([sample_pdf], {"target_size": "A5"}, workdir)
+        assert result.output_files[0].exists()
+        assert result.meta["resized_pages"] == 5
+
+    def test_resize_specific_pages(self, sample_pdf: Path, workdir: Path):
+        tool = ResizeTool()
+        result = tool.run([sample_pdf], {"target_size": "Letter", "page_range": "1-3"}, workdir)
+        assert result.meta["resized_pages"] == 3
+
+
+class TestWatermarkImageTool:
+    def test_watermark_image(self, sample_pdf: Path, sample_images: list[Path], workdir: Path):
+        tool = WatermarkImageTool()
+        result = tool.run([sample_pdf, sample_images[0]], {"opacity": "0.5", "scale": "0.3"}, workdir)
+        assert result.output_files[0].exists()
+        assert result.meta["watermarked_pages"] == 5
+
+    def test_watermark_image_specific_pages(self, sample_pdf: Path, sample_images: list[Path], workdir: Path):
+        tool = WatermarkImageTool()
+        result = tool.run(
+            [sample_pdf, sample_images[0]],
+            {"page_range": "1,3", "position": "bottom_right"},
+            workdir,
+        )
+        assert result.meta["watermarked_pages"] == 2
+
+
+# ────────────────────── Phase 2: Conversion tools ──────────────────────
+
+
+class TestPdfToTextTool:
+    def test_extract_text(self, sample_pdf: Path, workdir: Path):
+        tool = PdfToTextTool()
+        result = tool.run([sample_pdf], {}, workdir)
+        assert result.output_files[0].exists()
+        text = result.output_files[0].read_text(encoding="utf-8")
+        assert "Page 1" in text or "--- Page 1 ---" in text
+        assert result.meta["pages_extracted"] == 5
+
+    def test_extract_text_specific_pages(self, sample_pdf: Path, workdir: Path):
+        tool = PdfToTextTool()
+        result = tool.run([sample_pdf], {"page_range": "1,3"}, workdir)
+        assert result.meta["pages_extracted"] == 2
+
+
+@pytest.mark.skipif(shutil.which("gs") is None, reason="Ghostscript not installed")
+class TestFlattenTool:
+    def test_flatten(self, sample_pdf: Path, workdir: Path):
+        tool = FlattenTool()
+        result = tool.run([sample_pdf], {}, workdir)
+        assert result.output_files[0].exists()
+
+
 # ────────────────────── Registration ──────────────────────
 
 
@@ -202,13 +289,14 @@ class TestRegistration:
     def test_all_tools_registered(self):
         from pdf_agent.tools._builtins import get_builtin_tools
         tools = get_builtin_tools()
-        assert len(tools) == 15
+        assert len(tools) == 20
         names = {t.name for t in tools}
         expected = {
             "merge", "split", "rotate", "metadata_info",
             "extract", "delete", "reorder", "encrypt", "decrypt",
-            "watermark_text", "add_page_numbers", "images_to_pdf",
+            "watermark_text", "watermark_image", "add_page_numbers", "images_to_pdf",
             "compress", "ocr", "pdf_to_images",
+            "crop", "resize", "pdf_to_text", "flatten",
         }
         assert names == expected
 
