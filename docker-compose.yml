@@ -8,34 +8,15 @@ services:
       - "8000:8000"
     environment:
       PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/pdf_agent
-      PDF_AGENT_REDIS_URL: redis://redis:6379/0
-      PDF_AGENT_CELERY_BROKER_URL: redis://redis:6379/0
-      PDF_AGENT_CELERY_RESULT_BACKEND: redis://redis:6379/1
+      PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@db:5432/pdf_agent
+      PDF_AGENT_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      PDF_AGENT_OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      PDF_AGENT_OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
       PDF_AGENT_DATA_DIR: /app/data
     volumes:
       - app_data:/app/data
     depends_on:
       db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    user: pdfagent
-
-  worker:
-    build: .
-    command: celery -A pdf_agent.worker.celery_app worker --loglevel=info --concurrency=4
-    environment:
-      PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/pdf_agent
-      PDF_AGENT_REDIS_URL: redis://redis:6379/0
-      PDF_AGENT_CELERY_BROKER_URL: redis://redis:6379/0
-      PDF_AGENT_CELERY_RESULT_BACKEND: redis://redis:6379/1
-      PDF_AGENT_DATA_DIR: /app/data
-    volumes:
-      - app_data:/app/data
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     user: pdfagent
 
@@ -55,19 +36,6 @@ services:
       timeout: 3s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
 volumes:
   app_data:
   pg_data:
-  redis_data:

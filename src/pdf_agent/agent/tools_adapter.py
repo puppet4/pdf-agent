@@ -1,0 +1,169 @@
+"""Adapt existing BaseTool instances to LangChain StructuredTool for LangGraph."""
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from pathlib import Path
+from typing import Any, Literal, Optional
+
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field, create_model
+
+from pdf_agent.agent.state import AgentState
+from pdf_agent.schemas.tool import ParamSpec, ToolManifest
+from pdf_agent.tools.base import BaseTool
+from pdf_agent.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# ParamSpec → Pydantic field mapping
+# ---------------------------------------------------------------------------
+
+def _param_to_field(p: ParamSpec) -> tuple[type, Any]:
+    """Convert a ParamSpec to a (python_type, Field) tuple for create_model."""
+    field_kwargs: dict[str, Any] = {"description": p.description or p.label}
+
+    if p.type == "string":
+        py_type = str
+    elif p.type == "int":
+        py_type = int
+        if p.min is not None:
+            field_kwargs["ge"] = int(p.min)
+        if p.max is not None:
+            field_kwargs["le"] = int(p.max)
+    elif p.type == "float":
+        py_type = float
+        if p.min is not None:
+            field_kwargs["ge"] = p.min
+        if p.max is not None:
+            field_kwargs["le"] = p.max
+    elif p.type == "bool":
+        py_type = bool
+    elif p.type == "enum":
+        if p.options:
+            py_type = Literal[tuple(p.options)]  # type: ignore[valid-type]
+        else:
+            py_type = str
+    elif p.type == "page_range":
+        py_type = str
+        field_kwargs.setdefault("description", "Page range, e.g. 'all', '1-3,5', 'odd', 'even'")
+    else:
+        py_type = str
+
+    if p.required:
+        field_kwargs["default"] = ...
+    elif p.default is not None:
+        field_kwargs["default"] = p.default
+    else:
+        field_kwargs["default"] = None
+
+    return (py_type if p.required else Optional[py_type], Field(**field_kwargs))
+
+
+def _build_args_schema(manifest: ToolManifest) -> type[BaseModel]:
+    """Dynamically build a Pydantic model from a tool's manifest params."""
+    fields: dict[str, Any] = {}
+
+    for p in manifest.params:
+        fields[p.name] = _param_to_field(p)
+
+    # Multi-file tools expose an explicit file path list parameter
+    if manifest.inputs.max > 1:
+        fields["input_file_paths"] = (
+            Optional[list[str]],
+            Field(default=None, description="Explicit input file paths. If omitted, uses current active files."),
+        )
+
+    model = create_model(f"{manifest.name}_Args", **fields)
+    return model
+
+
+# ---------------------------------------------------------------------------
+# Wrapper that bridges LangChain tool call → BaseTool.run()
+# ---------------------------------------------------------------------------
+
+def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
+    """Create the callable that runs when the LLM invokes this tool.
+
+    The custom tool node injects 'state' and 'tool_call_id' into kwargs
+    before calling this wrapper. They are NOT part of the args_schema.
+    """
+
+    def wrapper(**kwargs: Any) -> str:
+        state: AgentState = kwargs.pop("state", {})
+        kwargs.pop("tool_call_id", None)
+
+        # --- Resolve input files ---
+        explicit_paths = kwargs.pop("input_file_paths", None)
+        if explicit_paths:
+            input_paths = [Path(p) for p in explicit_paths]
+        else:
+            input_paths = [Path(p) for p in state.get("current_files", [])]
+
+        # Validate input count
+        if len(input_paths) < manifest.inputs.min:
+            return f"Error: {manifest.name} requires at least {manifest.inputs.min} input file(s), got {len(input_paths)}."
+        if len(input_paths) > manifest.inputs.max:
+            input_paths = input_paths[: manifest.inputs.max]
+
+        # --- Create step workdir ---
+        step = state.get("step_counter", 0)
+        thread_workdir = Path(state.get("thread_workdir", "/tmp"))
+        step_dir = thread_workdir / f"step_{step}"
+        step_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Build params dict (remaining kwargs) ---
+        params: dict[str, Any] = {}
+        for p in manifest.params:
+            if p.name in kwargs and kwargs[p.name] is not None:
+                params[p.name] = kwargs[p.name]
+            elif p.default is not None:
+                params[p.name] = p.default
+
+        # --- Execute tool ---
+        try:
+            result = tool.run(inputs=input_paths, params=params, workdir=step_dir)
+        except Exception as e:
+            logger.exception("Tool %s failed", manifest.name)
+            return f"Error executing {manifest.name}: {e}"
+
+        # --- Format result ---
+        output_files = [str(f) for f in result.output_files]
+        parts = []
+        if result.log:
+            parts.append(result.log)
+        if result.meta:
+            parts.append(f"Metadata: {json.dumps(result.meta, ensure_ascii=False, default=str)}")
+        if output_files:
+            parts.append(f"Output files: {output_files}")
+
+        return "\n".join(parts) if parts else "Done (no output)."
+
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def adapt_all_tools(registry: ToolRegistry) -> list[StructuredTool]:
+    """Convert all registered BaseTool instances into LangChain StructuredTools."""
+    tools: list[StructuredTool] = []
+
+    for base_tool in registry.list_all():
+        manifest = base_tool.manifest()
+        args_schema = _build_args_schema(manifest)
+        wrapper = _make_tool_wrapper(base_tool, manifest)
+
+        lc_tool = StructuredTool(
+            name=manifest.name,
+            description=manifest.description or manifest.label,
+            args_schema=args_schema,
+            func=wrapper,
+        )
+        tools.append(lc_tool)
+
+    logger.info("Adapted %d tools for LangGraph", len(tools))
+    return tools

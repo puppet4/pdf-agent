@@ -11,15 +11,16 @@ dependencies = [
     "alembic>=1.14.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
-    "celery[redis]>=5.4.0",
-    "redis>=5.0.0",
     "python-multipart>=0.0.18",
     "pikepdf>=9.0.0",
     "Pillow>=10.0.0",
     "reportlab>=4.0.0",
-    "sse-starlette>=2.1.0",
     "httpx>=0.28.0",
     "aiofiles>=24.1.0",
+    "langgraph>=0.4.0",
+    "langchain-openai>=0.3.0",
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "psycopg[binary,pool]>=3.1.0",
 ]
 
 [project.optional-dependencies]

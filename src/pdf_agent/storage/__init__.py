@@ -23,27 +23,24 @@ class LocalStorage:
     def get_upload_path(self, file_id: uuid.UUID, filename: str) -> Path:
         return settings.upload_dir / str(file_id) / filename
 
-    def create_job_workdir(self, job_id: uuid.UUID) -> Path:
-        workdir = settings.jobs_dir / str(job_id) / "work"
+    def create_thread_workdir(self, thread_id: str) -> Path:
+        workdir = settings.threads_dir / thread_id
         workdir.mkdir(parents=True, exist_ok=True)
         return workdir
 
-    def create_job_output_dir(self, job_id: uuid.UUID) -> Path:
-        outdir = settings.jobs_dir / str(job_id) / "output"
-        outdir.mkdir(parents=True, exist_ok=True)
-        return outdir
-
-    def get_job_output_dir(self, job_id: uuid.UUID) -> Path:
-        return settings.jobs_dir / str(job_id) / "output"
+    def create_thread_step_dir(self, thread_id: str, step: int) -> Path:
+        step_dir = settings.threads_dir / thread_id / f"step_{step}"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        return step_dir
 
     @staticmethod
     def compute_sha256(data: bytes) -> str:
         return hashlib.sha256(data).hexdigest()
 
-    def cleanup_job(self, job_id: uuid.UUID) -> None:
-        job_dir = settings.jobs_dir / str(job_id)
-        if job_dir.exists():
-            shutil.rmtree(job_dir)
+    def cleanup_thread(self, thread_id: str) -> None:
+        thread_dir = settings.threads_dir / thread_id
+        if thread_dir.exists():
+            shutil.rmtree(thread_dir)
 
 
 storage = LocalStorage()

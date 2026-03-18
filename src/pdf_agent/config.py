@@ -12,13 +12,18 @@ class Settings(BaseSettings):
     app_name: str = "PDF Agent Toolbox"
     debug: bool = False
 
-    # --- Database ---
+    # --- Database (async for FastAPI) ---
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent"
 
-    # --- Redis / Celery ---
-    redis_url: str = "redis://localhost:6379/0"
-    celery_broker_url: str = "redis://localhost:6379/0"
-    celery_result_backend: str = "redis://localhost:6379/1"
+    # --- LangGraph Checkpointer (sync psycopg) ---
+    checkpointer_db_url: str = "postgresql://postgres:postgres@localhost:5432/pdf_agent"
+
+    # --- OpenAI / LLM ---
+    openai_api_key: str = ""
+    openai_base_url: str | None = None
+    openai_model: str = "gpt-4o"
+    agent_temperature: float = 0
+    agent_max_iterations: int = 20
 
     # --- Storage ---
     data_dir: Path = Path("data")
@@ -28,20 +33,17 @@ class Settings(BaseSettings):
     max_page_count: int = 2000
     external_cmd_timeout_sec: int = 1800  # 30 min
 
-    # --- Cleanup ---
-    job_retention_days: int = 7
-
     @property
     def upload_dir(self) -> Path:
         return self.data_dir / "uploads"
 
     @property
-    def jobs_dir(self) -> Path:
-        return self.data_dir / "jobs"
+    def threads_dir(self) -> Path:
+        return self.data_dir / "threads"
 
     def ensure_dirs(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
-        self.jobs_dir.mkdir(parents=True, exist_ok=True)
+        self.threads_dir.mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()
