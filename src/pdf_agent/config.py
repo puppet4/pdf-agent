@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     max_page_count: int = 2000
     external_cmd_timeout_sec: int = 1800  # 30 min
 
+    # --- Auth ---
+    api_key: str = ""  # if set, require X-API-Key header for all API calls
+
+    # --- LangSmith ---
+    langsmith_api_key: str = ""
+    langsmith_project: str = "pdf-agent"
+
+    # --- Rate Limiting ---
+    rate_limit_rpm: int = 20  # max chat requests per minute per IP, 0 = disabled
+
     # --- Cleanup ---
     thread_ttl_hours: int = 72  # delete thread workdirs older than this
 

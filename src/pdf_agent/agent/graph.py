@@ -108,7 +108,7 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
 
         for call in last_msg.tool_calls:
             tool_name = call["name"]
-            tool_args = call["args"]
+            tool_args = dict(call["args"])  # copy to avoid mutating checkpointed data
             call_id = call["id"]
 
             lc_tool = tool_map.get(tool_name)
