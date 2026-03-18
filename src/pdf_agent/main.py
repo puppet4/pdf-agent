@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -21,13 +22,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _cleanup_loop():
+    """Periodically clean up expired thread workdirs."""
+    from pdf_agent.storage import storage
+
+    while True:
+        await asyncio.sleep(3600)  # every hour
+        try:
+            removed = storage.cleanup_expired_threads()
+            if removed:
+                logger.info("Cleaned up %d expired thread(s)", removed)
+        except Exception:
+            logger.exception("Thread cleanup failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting %s ...", settings.app_name)
     settings.ensure_dirs()
+
+    if not settings.openai_api_key:
+        raise RuntimeError(
+            "PDF_AGENT_OPENAI_API_KEY is not set. "
+            "Please set it via environment variable or .env file."
+        )
+
     load_builtin_tools()
     logger.info("Loaded %d tools", len(registry))
+
+    # Run initial cleanup
+    from pdf_agent.storage import storage
+    removed = storage.cleanup_expired_threads()
+    if removed:
+        logger.info("Startup cleanup: removed %d expired thread(s)", removed)
 
     # Initialize LangGraph checkpointer
     pool = AsyncConnectionPool(
@@ -47,10 +75,14 @@ async def lifespan(app: FastAPI):
     app.state.pool = pool
     logger.info("LangGraph agent initialized with model=%s", settings.openai_model)
 
+    # Start background cleanup task
+    cleanup_task = asyncio.create_task(_cleanup_loop())
+
     yield
 
     # Shutdown
     logger.info("Shutting down %s", settings.app_name)
+    cleanup_task.cancel()
     await pool.close()
 
 

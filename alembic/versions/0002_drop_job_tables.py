@@ -18,16 +18,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.drop_table('artifacts')
-    op.drop_table('job_steps')
-    op.drop_index('ix_jobs_status_created', table_name='jobs')
-    op.drop_table('jobs')
+    # Use raw SQL with IF EXISTS to be idempotent
+    op.execute("DROP TABLE IF EXISTS artifacts CASCADE")
+    op.execute("DROP TABLE IF EXISTS job_steps CASCADE")
+    op.execute("DROP INDEX IF EXISTS ix_jobs_status_created")
+    op.execute("DROP TABLE IF EXISTS jobs CASCADE")
 
     # Drop enums that are no longer needed
-    sa.Enum(name='artifacttype').drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name='stepstatus').drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name='jobmode').drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name='jobstatus').drop(op.get_bind(), checkfirst=True)
+    op.execute("DROP TYPE IF EXISTS artifacttype")
+    op.execute("DROP TYPE IF EXISTS stepstatus")
+    op.execute("DROP TYPE IF EXISTS jobmode")
+    op.execute("DROP TYPE IF EXISTS jobstatus")
 
 
 def downgrade() -> None:

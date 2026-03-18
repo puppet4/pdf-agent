@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -116,3 +118,103 @@ class TestShouldContinue:
         state = {"messages": [mock_msg], "step_counter": 999}
         from langgraph.graph import END
         assert _should_continue(state) == END
+
+
+# ---------------------------------------------------------------------------
+# Tiktoken counter tests
+# ---------------------------------------------------------------------------
+
+class TestTiktokenCounter:
+    def test_counts_tokens(self):
+        from pdf_agent.agent.graph import _tiktoken_counter
+        from langchain_core.messages import HumanMessage
+        messages = [HumanMessage(content="Hello world")]
+        count = _tiktoken_counter(messages)
+        assert count > 0  # "Hello world" ~= 2 tokens + 4 overhead
+
+    def test_empty_messages(self):
+        from pdf_agent.agent.graph import _tiktoken_counter
+        assert _tiktoken_counter([]) == 0
+
+    def test_long_message_more_tokens(self):
+        from pdf_agent.agent.graph import _tiktoken_counter
+        from langchain_core.messages import HumanMessage
+        short = [HumanMessage(content="Hi")]
+        long = [HumanMessage(content="Hello world, this is a much longer message with many tokens")]
+        assert _tiktoken_counter(long) > _tiktoken_counter(short)
+
+
+# ---------------------------------------------------------------------------
+# SSE helpers tests
+# ---------------------------------------------------------------------------
+
+class TestSanitizeToolArgs:
+    def test_removes_state_and_tool_call_id(self):
+        from pdf_agent.api.agent import _sanitize_tool_args
+        args = {"angle": "90", "state": {"big": "data"}, "tool_call_id": "abc"}
+        clean = _sanitize_tool_args(args)
+        assert clean == {"angle": "90"}
+
+    def test_keeps_normal_args(self):
+        from pdf_agent.api.agent import _sanitize_tool_args
+        args = {"text": "hello", "font_size": 48}
+        assert _sanitize_tool_args(args) == args
+
+
+class TestPathsToDownloadUrls:
+    def test_converts_paths(self):
+        from pdf_agent.api.agent import _paths_to_download_urls
+        urls = _paths_to_download_urls("t1", ["/data/threads/t1/step_0/out.pdf"])
+        assert urls == ["/api/agent/threads/t1/files/out.pdf"]
+
+    def test_empty_paths(self):
+        from pdf_agent.api.agent import _paths_to_download_urls
+        assert _paths_to_download_urls("t1", []) == []
+
+
+# ---------------------------------------------------------------------------
+# Thread cleanup tests
+# ---------------------------------------------------------------------------
+
+class TestThreadCleanup:
+    def test_cleanup_expired_threads(self, tmp_path):
+        from pdf_agent.config import settings
+        from pdf_agent.storage import storage
+
+        original_dir = settings.threads_dir
+        settings.data_dir = tmp_path
+        threads_dir = tmp_path / "threads"
+        threads_dir.mkdir()
+
+        try:
+            # Create an "old" thread dir
+            old_thread = threads_dir / "old-thread"
+            old_thread.mkdir()
+            (old_thread / "step_0").mkdir()
+            (old_thread / "step_0" / "out.pdf").write_bytes(b"%PDF")
+            # Set mtime to 100 hours ago
+            old_time = time.time() - 100 * 3600
+            os.utime(old_thread, (old_time, old_time))
+
+            # Create a "recent" thread dir
+            new_thread = threads_dir / "new-thread"
+            new_thread.mkdir()
+
+            removed = storage.cleanup_expired_threads()
+            assert removed == 1
+            assert not old_thread.exists()
+            assert new_thread.exists()
+        finally:
+            settings.data_dir = original_dir.parent.parent  # restore
+
+    def test_cleanup_no_threads_dir(self, tmp_path):
+        from pdf_agent.config import settings
+        from pdf_agent.storage import storage
+
+        original_dir = settings.threads_dir
+        settings.data_dir = tmp_path / "nonexistent"
+
+        try:
+            assert storage.cleanup_expired_threads() == 0
+        finally:
+            settings.data_dir = original_dir.parent.parent

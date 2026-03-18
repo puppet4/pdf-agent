@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import shutil
+import time
 import uuid
 from pathlib import Path
 
 from pdf_agent.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class LocalStorage:
@@ -41,6 +45,27 @@ class LocalStorage:
         thread_dir = settings.threads_dir / thread_id
         if thread_dir.exists():
             shutil.rmtree(thread_dir)
+
+    def cleanup_expired_threads(self) -> int:
+        """Remove thread workdirs older than thread_ttl_hours. Returns count removed."""
+        threads_dir = settings.threads_dir
+        if not threads_dir.exists():
+            return 0
+
+        cutoff = time.time() - settings.thread_ttl_hours * 3600
+        removed = 0
+        for entry in threads_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            try:
+                mtime = entry.stat().st_mtime
+                if mtime < cutoff:
+                    shutil.rmtree(entry)
+                    removed += 1
+                    logger.info("Cleaned up expired thread workdir: %s", entry.name)
+            except OSError:
+                logger.warning("Failed to clean up thread workdir: %s", entry.name)
+        return removed
 
 
 storage = LocalStorage()
