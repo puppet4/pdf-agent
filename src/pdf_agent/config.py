@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     max_page_count: int = 2000
     external_cmd_timeout_sec: int = 1800  # 30 min
 
+    # --- Cleanup ---
+    thread_ttl_hours: int = 72  # delete thread workdirs older than this
+
     @property
     def upload_dir(self) -> Path:
         return self.data_dir / "uploads"

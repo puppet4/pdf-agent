@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
+# Keys to strip from tool_start args (injected by our tool node, not user-facing)
+_INTERNAL_KEYS = {"state", "tool_call_id"}
+
 
 # ---------------------------------------------------------------------------
 # Request / response schemas
@@ -61,6 +64,34 @@ async def _resolve_uploaded_files(file_ids: list[str]) -> list[FileInfo]:
 def _sse_event(event: str, data: dict) -> str:
     """Format a Server-Sent Event."""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _sanitize_tool_args(args: dict) -> dict:
+    """Remove internal keys that should not be exposed to the client."""
+    return {k: v for k, v in args.items() if k not in _INTERNAL_KEYS}
+
+
+def _paths_to_download_urls(thread_id: str, file_paths: list[str]) -> list[str]:
+    """Convert absolute file paths to API download URLs."""
+    urls = []
+    for fp in file_paths:
+        filename = Path(fp).name
+        urls.append(f"/api/agent/threads/{thread_id}/files/{filename}")
+    return urls
+
+
+def _extract_output_files(output: str) -> list[str]:
+    """Extract file paths from tool output string."""
+    if not isinstance(output, str):
+        return []
+    for line in output.splitlines():
+        if line.startswith("Output files:"):
+            raw = line[len("Output files:"):].strip()
+            try:
+                return json.loads(raw.replace("'", '"'))
+            except (json.JSONDecodeError, ValueError):
+                pass
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -108,30 +139,23 @@ async def chat(req: ChatRequest, request: Request):
                     if chunk.content:
                         yield _sse_event("token", {"content": chunk.content})
 
-                # Tool start
+                # Tool start — filter out internal keys
                 elif kind == "on_tool_start":
+                    raw_args = event["data"].get("input", {})
                     yield _sse_event("tool_start", {
                         "tool": event["name"],
-                        "args": event["data"].get("input", {}),
+                        "args": _sanitize_tool_args(raw_args) if isinstance(raw_args, dict) else {},
                     })
 
-                # Tool end
+                # Tool end — convert paths to download URLs
                 elif kind == "on_tool_end":
                     output = event["data"].get("output", "")
-                    # Extract file paths from output
-                    files = []
-                    if isinstance(output, str):
-                        for line in output.splitlines():
-                            if line.startswith("Output files:"):
-                                raw = line[len("Output files:"):].strip()
-                                try:
-                                    files = json.loads(raw.replace("'", '"'))
-                                except (json.JSONDecodeError, ValueError):
-                                    pass
+                    file_paths = _extract_output_files(output)
+                    download_urls = _paths_to_download_urls(thread_id, file_paths)
                     yield _sse_event("tool_end", {
                         "tool": event["name"],
                         "output": str(output)[:500],
-                        "files": files,
+                        "files": download_urls,
                     })
 
         except Exception as e:
@@ -171,7 +195,7 @@ async def list_thread_files(thread_id: str, request: Request):
                         "step": step_dir.name,
                         "filename": f.name,
                         "size_bytes": f.stat().st_size,
-                        "path": str(f),
+                        "download_url": f"/api/agent/threads/{thread_id}/files/{f.name}",
                     })
     return {"thread_id": thread_id, "files": files}
 
@@ -183,8 +207,8 @@ async def download_thread_file(thread_id: str, filename: str):
     if not thread_dir.exists():
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    # Search step dirs for the file
-    for step_dir in sorted(thread_dir.iterdir()):
+    # Search step dirs for the file (reverse order — latest first)
+    for step_dir in sorted(thread_dir.iterdir(), reverse=True):
         if step_dir.is_dir():
             candidate = step_dir / filename
             if candidate.is_file():

@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import tiktoken
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage, trim_messages
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -21,7 +22,39 @@ from pdf_agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-MAX_MESSAGES = 40  # keep last N messages to avoid context overflow
+# Reserve tokens for system prompt + response; use the rest for history
+MAX_HISTORY_TOKENS = 100_000
+_encoder: tiktoken.Encoding | None = None
+
+
+def _get_encoder() -> tiktoken.Encoding:
+    """Lazy-load the tiktoken encoder for the configured model."""
+    global _encoder
+    if _encoder is None:
+        try:
+            _encoder = tiktoken.encoding_for_model(settings.openai_model)
+        except KeyError:
+            _encoder = tiktoken.get_encoding("cl100k_base")
+    return _encoder
+
+
+def _tiktoken_counter(messages: list) -> int:
+    """Count tokens for a list of LangChain messages using tiktoken."""
+    enc = _get_encoder()
+    total = 0
+    for msg in messages:
+        content = msg.content if hasattr(msg, "content") else str(msg)
+        if isinstance(content, str):
+            total += len(enc.encode(content, disallowed_special=()))
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, str):
+                    total += len(enc.encode(part, disallowed_special=()))
+                elif isinstance(part, dict) and "text" in part:
+                    total += len(enc.encode(part["text"], disallowed_special=()))
+        # Overhead per message (role, separators)
+        total += 4
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -38,11 +71,11 @@ def _make_agent_node(model_with_tools: ChatOpenAI):
             current_files=state.get("current_files", []),
         )
 
-        # Trim messages to stay within context window
+        # Trim messages to stay within context window (token-level)
         messages = trim_messages(
             state["messages"],
-            max_tokens=MAX_MESSAGES,
-            token_counter=len,  # count by number of messages
+            max_tokens=MAX_HISTORY_TOKENS,
+            token_counter=_tiktoken_counter,
             strategy="last",
             start_on="human",
             allow_partial=False,
