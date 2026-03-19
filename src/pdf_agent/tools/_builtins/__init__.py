@@ -28,6 +28,7 @@ def get_builtin_tools() -> list[BaseTool]:
     from pdf_agent.tools._builtins.pdf_to_word import PdfToWordTool
     from pdf_agent.tools._builtins.pdf_to_office import PdfToExcelTool, PdfToPptTool
     from pdf_agent.tools._builtins.pdf_to_text import PdfToTextTool
+    from pdf_agent.tools._builtins.pdf_to_html import PdfToHtmlTool
     from pdf_agent.tools._builtins.crop import CropTool
     from pdf_agent.tools._builtins.resize import ResizeTool
     from pdf_agent.tools._builtins.flatten import FlattenTool
@@ -35,6 +36,9 @@ def get_builtin_tools() -> list[BaseTool]:
     from pdf_agent.tools._builtins.nup import NUpTool
     from pdf_agent.tools._builtins.qr_code import QrCodeTool
     from pdf_agent.tools._builtins.compare import CompareTool
+    from pdf_agent.tools._builtins.form_fill import FormFillTool
+    from pdf_agent.tools._builtins.signature_info import SignatureInfoTool
+    from pdf_agent.tools._builtins.deskew import DeskewTool
 
     return [
         MergeTool(), SplitTool(), RotateTool(),
@@ -45,7 +49,8 @@ def get_builtin_tools() -> list[BaseTool]:
         AddPageNumbersTool(), ImagesToPdfTool(),
         CompressTool(), RepairTool(), OcrTool(),
         PdfToImagesTool(), PdfToWordTool(), PdfToExcelTool(), PdfToPptTool(),
-        PdfToTextTool(),
+        PdfToTextTool(), PdfToHtmlTool(),
         CropTool(), ResizeTool(), FlattenTool(),
         RemoveBlankPagesTool(), NUpTool(), QrCodeTool(), CompareTool(),
+        FormFillTool(), SignatureInfoTool(), DeskewTool(),
     ]
