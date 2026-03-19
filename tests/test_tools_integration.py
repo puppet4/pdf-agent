@@ -289,14 +289,14 @@ class TestRegistration:
     def test_all_tools_registered(self):
         from pdf_agent.tools._builtins import get_builtin_tools
         tools = get_builtin_tools()
-        assert len(tools) == 20
+        assert len(tools) == 25
         names = {t.name for t in tools}
         expected = {
-            "merge", "split", "rotate", "metadata_info",
+            "merge", "split", "rotate", "metadata_info", "set_metadata",
             "extract", "delete", "reorder", "encrypt", "decrypt",
-            "watermark_text", "watermark_image", "add_page_numbers", "images_to_pdf",
-            "compress", "ocr", "pdf_to_images",
-            "crop", "resize", "pdf_to_text", "flatten",
+            "watermark_text", "watermark_image", "stamp", "add_page_numbers", "images_to_pdf",
+            "compress", "repair", "ocr", "pdf_to_images", "pdf_to_word",
+            "crop", "resize", "pdf_to_text", "flatten", "remove_blank_pages",
         }
         assert names == expected
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import queue
 import shutil
 import time
 import uuid
@@ -143,13 +144,29 @@ async def chat(req: ChatRequest, request: Request):
         tool_active = None
         tool_start_time = None
 
+        # Import progress queue helpers
+        from pdf_agent.agent.tools_adapter import get_progress_queue, release_progress_queue
+        prog_queue = get_progress_queue(thread_id)
+
         try:
             aiter = graph.astream_events(input_state, config=config, version="v2").__aiter__()
             while True:
                 try:
                     event = await asyncio.wait_for(aiter.__anext__(), timeout=_HEARTBEAT_INTERVAL)
                 except asyncio.TimeoutError:
-                    # Emit heartbeat while tool is running
+                    # Drain progress queue
+                    while True:
+                        try:
+                            prog = prog_queue.get_nowait()
+                            yield _sse_event("tool_progress", {
+                                "tool": tool_active or "",
+                                "percent": prog.get("percent", 0),
+                                "message": prog.get("message", ""),
+                                "elapsed_seconds": round(time.time() - tool_start_time, 1) if tool_start_time else 0,
+                            })
+                        except queue.Empty:
+                            break
+                    # Fallback heartbeat if no progress events
                     if tool_active and tool_start_time:
                         elapsed = time.time() - tool_start_time
                         yield _sse_event("tool_progress", {
@@ -198,6 +215,7 @@ async def chat(req: ChatRequest, request: Request):
             yield _sse_event("error", {"message": str(e)})
 
         yield _sse_event("done", {})
+        release_progress_queue(thread_id)
 
     return StreamingResponse(
         event_stream(),
