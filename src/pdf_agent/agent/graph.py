@@ -135,7 +135,6 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
             output_files = _parse_output_files(result_str)
             if output_files:
                 latest_output_files = output_files
-                base_tool = tool_registry.get(tool_name)
                 for fp in output_files:
                     p = Path(fp)
                     mime = mimetypes.guess_type(p.name)[0] or "application/octet-stream"

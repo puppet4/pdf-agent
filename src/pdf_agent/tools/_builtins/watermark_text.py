@@ -5,8 +5,6 @@ import io
 from pathlib import Path
 
 import pikepdf
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas

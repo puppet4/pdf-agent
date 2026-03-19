@@ -17,6 +17,7 @@ from psycopg_pool import AsyncConnectionPool
 from pdf_agent.config import settings
 from pdf_agent.core import PDFAgentError
 from pdf_agent.api.router import api_router
+from pdf_agent.api.middleware import ApiKeyMiddleware, JWTMiddleware, RateLimitMiddleware, RequestIdMiddleware
 from pdf_agent.tools.registry import load_builtin_tools, registry
 
 
@@ -138,8 +139,6 @@ app = FastAPI(
 )
 
 # Middleware (outermost first)
-from pdf_agent.api.middleware import ApiKeyMiddleware, JWTMiddleware, RateLimitMiddleware, RequestIdMiddleware
-
 if settings.metrics_enabled:
     from pdf_agent.api.metrics import MetricsMiddleware
     app.add_middleware(MetricsMiddleware)
