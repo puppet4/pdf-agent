@@ -163,7 +163,7 @@ class TestE2EToolRun:
         data = resp.json()
         assert "database" in data
         assert "tools_loaded" in data
-        assert data["tools_loaded"] >= 30
+        assert data["tools_loaded"] >= 34
 
     def test_workflows_list(self, client):
         """Workflow list returns built-in templates."""

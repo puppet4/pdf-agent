@@ -22,6 +22,20 @@ from pdf_agent.tools.registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Concurrency limiter for CPU-intensive async tools
+# ---------------------------------------------------------------------------
+
+_ASYNC_SEMAPHORE: asyncio.Semaphore | None = None
+_MAX_CONCURRENT_ASYNC = 4  # max simultaneous OCR/compress/etc operations
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    global _ASYNC_SEMAPHORE
+    if _ASYNC_SEMAPHORE is None:
+        _ASYNC_SEMAPHORE = asyncio.Semaphore(_MAX_CONCURRENT_ASYNC)
+    return _ASYNC_SEMAPHORE
+
+# ---------------------------------------------------------------------------
 # Result cache — keyed by (tool_name, sha256(inputs), params_hash)
 # ---------------------------------------------------------------------------
 
@@ -207,16 +221,17 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
 
         try:
             if manifest.async_hint:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        tool.run,
-                        inputs=input_paths,
-                        params=params,
-                        workdir=step_dir,
-                        reporter=reporter,
-                    ),
-                    timeout=settings.external_cmd_timeout_sec,
-                )
+                async with _get_semaphore():
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            tool.run,
+                            inputs=input_paths,
+                            params=params,
+                            workdir=step_dir,
+                            reporter=reporter,
+                        ),
+                        timeout=settings.external_cmd_timeout_sec,
+                    )
             else:
                 result = tool.run(
                     inputs=input_paths,
