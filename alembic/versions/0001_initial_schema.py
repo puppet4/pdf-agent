@@ -8,7 +8,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSON
+from sqlalchemy.dialects.postgresql import UUID
 
 
 revision: str = '0001'
@@ -16,38 +16,24 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-# Enum names used by the models
-jobstatus_enum = sa.Enum('PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'CANCELED', name='jobstatus')
-jobmode_enum = sa.Enum('FORM', 'AGENT', name='jobmode')
-stepstatus_enum = sa.Enum('PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'SKIPPED', name='stepstatus')
-artifacttype_enum = sa.Enum('input', 'intermediate', 'output', name='artifacttype')
-
 
 def upgrade() -> None:
-    # Create enums (idempotent via exception handling)
+    # Create enums (idempotent)
     op.execute("""
-        DO $$ BEGIN
-            CREATE TYPE jobstatus AS ENUM ('PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'CANCELED');
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$
+        DO $$ BEGIN CREATE TYPE jobstatus AS ENUM ('PENDING','RUNNING','SUCCESS','FAILED','CANCELED');
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$
     """)
     op.execute("""
-        DO $$ BEGIN
-            CREATE TYPE jobmode AS ENUM ('FORM', 'AGENT');
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$
+        DO $$ BEGIN CREATE TYPE jobmode AS ENUM ('FORM','AGENT');
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$
     """)
     op.execute("""
-        DO $$ BEGIN
-            CREATE TYPE stepstatus AS ENUM ('PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'SKIPPED');
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$
+        DO $$ BEGIN CREATE TYPE stepstatus AS ENUM ('PENDING','RUNNING','SUCCESS','FAILED','SKIPPED');
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$
     """)
     op.execute("""
-        DO $$ BEGIN
-            CREATE TYPE artifacttype AS ENUM ('input', 'intermediate', 'output');
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$
+        DO $$ BEGIN CREATE TYPE artifacttype AS ENUM ('input','intermediate','output');
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$
     """)
 
     # files
@@ -64,59 +50,62 @@ def upgrade() -> None:
     )
     op.create_index('ix_files_sha256', 'files', ['sha256'])
 
-    # jobs
-    op.create_table(
-        'jobs',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True),
-        sa.Column('status', jobstatus_enum, nullable=False),
-        sa.Column('mode', jobmode_enum, nullable=False),
-        sa.Column('instruction', sa.Text, nullable=True),
-        sa.Column('plan_json', JSON, nullable=False),
-        sa.Column('progress', sa.Integer, nullable=False, server_default='0'),
-        sa.Column('error_code', sa.String(64), nullable=True),
-        sa.Column('error_message', sa.Text, nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column('result_path', sa.String(1024), nullable=True),
-        sa.Column('result_type', sa.String(32), nullable=True),
-    )
-    op.create_index('ix_jobs_status_created', 'jobs', ['status', 'created_at'])
+    # jobs (uses TEXT columns to avoid sa.Enum auto-DDL)
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS jobs (
+            id UUID PRIMARY KEY,
+            status jobstatus NOT NULL,
+            mode jobmode NOT NULL,
+            instruction TEXT,
+            plan_json JSON NOT NULL,
+            progress INTEGER NOT NULL DEFAULT 0,
+            error_code VARCHAR(64),
+            error_message TEXT,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            result_path VARCHAR(1024),
+            result_type VARCHAR(32)
+        )
+    """)
+    op.execute("CREATE INDEX IF NOT EXISTS ix_jobs_status_created ON jobs(status, created_at)")
 
     # job_steps
-    op.create_table(
-        'job_steps',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True),
-        sa.Column('job_id', UUID(as_uuid=True), sa.ForeignKey('jobs.id'), nullable=False),
-        sa.Column('idx', sa.Integer, nullable=False),
-        sa.Column('tool_name', sa.String(128), nullable=False),
-        sa.Column('params_json', JSON, nullable=False),
-        sa.Column('status', stepstatus_enum, nullable=False),
-        sa.Column('started_at', sa.DateTime(timezone=True), nullable=True),
-        sa.Column('ended_at', sa.DateTime(timezone=True), nullable=True),
-        sa.Column('log_text', sa.Text, nullable=True),
-        sa.Column('output_path', sa.String(1024), nullable=True),
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS job_steps (
+            id UUID PRIMARY KEY,
+            job_id UUID NOT NULL REFERENCES jobs(id),
+            idx INTEGER NOT NULL,
+            tool_name VARCHAR(128) NOT NULL,
+            params_json JSON NOT NULL,
+            status stepstatus NOT NULL,
+            started_at TIMESTAMPTZ,
+            ended_at TIMESTAMPTZ,
+            log_text TEXT,
+            output_path VARCHAR(1024)
+        )
+    """)
 
     # artifacts
-    op.create_table(
-        'artifacts',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True),
-        sa.Column('job_id', UUID(as_uuid=True), sa.ForeignKey('jobs.id'), nullable=False),
-        sa.Column('step_id', UUID(as_uuid=True), sa.ForeignKey('job_steps.id'), nullable=True),
-        sa.Column('type', artifacttype_enum, nullable=False),
-        sa.Column('path', sa.String(1024), nullable=False),
-        sa.Column('meta_json', JSON, nullable=True),
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS artifacts (
+            id UUID PRIMARY KEY,
+            job_id UUID NOT NULL REFERENCES jobs(id),
+            step_id UUID REFERENCES job_steps(id),
+            type artifacttype NOT NULL,
+            path VARCHAR(1024) NOT NULL,
+            meta_json JSON
+        )
+    """)
 
 
 def downgrade() -> None:
-    op.drop_table('artifacts')
-    op.drop_table('job_steps')
-    op.drop_table('jobs')
-    op.drop_index('ix_files_sha256', table_name='files')
-    op.drop_table('files')
-
-    artifacttype_enum.drop(op.get_bind(), checkfirst=True)
-    stepstatus_enum.drop(op.get_bind(), checkfirst=True)
-    jobmode_enum.drop(op.get_bind(), checkfirst=True)
-    jobstatus_enum.drop(op.get_bind(), checkfirst=True)
+    op.execute("DROP TABLE IF EXISTS artifacts CASCADE")
+    op.execute("DROP TABLE IF EXISTS job_steps CASCADE")
+    op.execute("DROP INDEX IF EXISTS ix_jobs_status_created")
+    op.execute("DROP TABLE IF EXISTS jobs CASCADE")
+    op.execute("DROP INDEX IF EXISTS ix_files_sha256")
+    op.execute("DROP TABLE IF EXISTS files CASCADE")
+    op.execute("DROP TYPE IF EXISTS artifacttype")
+    op.execute("DROP TYPE IF EXISTS stepstatus")
+    op.execute("DROP TYPE IF EXISTS jobmode")
+    op.execute("DROP TYPE IF EXISTS jobstatus")
