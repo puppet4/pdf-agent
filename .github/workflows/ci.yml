@@ -48,7 +48,10 @@ jobs:
           PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent
           PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@localhost:5432/pdf_agent
           PDF_AGENT_OPENAI_API_KEY: sk-placeholder
-        run: alembic upgrade head
+        run: |
+          find . -name '*.pyc' -delete
+          find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+          alembic upgrade head
 
       - name: Run tests
         env:
