@@ -14,11 +14,13 @@ build/
 .vscode/
 *.swp
 
-# Data (local storage)
-data/uploads/*
-data/jobs/*
-!data/uploads/.gitkeep
-!data/jobs/.gitkeep
+# Data (local storage — runtime files, do not commit)
+data/
+uploads/
+*.json
+!package.json
+!pyproject.toml
+!.env.example
 
 # Environment
 .env
@@ -26,6 +28,5 @@ data/jobs/*
 
 # OS
 .DS_Store
-
 
 .claude
