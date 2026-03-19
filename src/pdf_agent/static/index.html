@@ -123,8 +123,52 @@ mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
 .btn-attach{background:none;border:1px solid var(--border);width:40px;height:40px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;color:var(--text-secondary);transition:border-color .15s;flex-shrink:0}
 .btn-attach:hover{border-color:var(--accent);color:var(--accent)}
 
-/* Empty state */
-.empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--text-secondary);gap:12px;padding:40px}
+/* Tabs */
+.sidebar-tabs{display:flex;border-bottom:1px solid var(--border)}
+.sidebar-tab{flex:1;padding:8px 4px;font-size:12px;font-weight:500;text-align:center;cursor:pointer;color:var(--text-secondary);border:none;background:none;border-bottom:2px solid transparent;transition:all .15s}
+.sidebar-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.sidebar-tab:hover{color:var(--accent)}
+.tab-panel{display:none;flex:1;flex-direction:column;overflow:hidden}
+.tab-panel.active{display:flex}
+
+/* File manager */
+.file-manager{flex:1;overflow-y:auto;padding:6px}
+.file-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:6px;background:var(--bg-sidebar)}
+.file-item img{width:32px;height:40px;object-fit:cover;border-radius:4px;border:1px solid var(--border);flex-shrink:0}
+.file-item .fi-icon{width:32px;height:40px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.file-item .fi-info{flex:1;min-width:0}
+.file-item .fi-name{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-item .fi-meta{font-size:11px;color:var(--text-secondary)}
+.file-item .fi-actions{display:flex;gap:4px;flex-shrink:0}
+.file-item .fi-btn{background:none;border:none;color:var(--text-secondary);padding:3px 5px;border-radius:4px;font-size:13px;cursor:pointer;transition:all .15s}
+.file-item .fi-btn:hover{background:var(--bg-tool);color:var(--accent)}
+
+/* Workflow manager */
+.wf-manager{flex:1;overflow-y:auto;padding:6px}
+.wf-item{padding:9px 11px;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:6px;background:var(--bg-sidebar)}
+.wf-item .wi-header{display:flex;align-items:center;gap:6px}
+.wf-item .wi-name{font-size:13px;font-weight:500;flex:1}
+.wf-item .wi-badge{font-size:10px;padding:1px 6px;border-radius:8px;background:#e0e7ff;color:var(--accent)}
+[data-theme="dark"] .wf-item .wi-badge{background:#1e1b4b}
+.wf-item .wi-desc{font-size:11px;color:var(--text-secondary);margin-top:3px}
+.wf-item .wi-actions{display:flex;gap:4px;margin-top:6px}
+.wf-item .wi-btn{font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:none;color:var(--text-secondary);cursor:pointer;transition:all .15s}
+.wf-item .wi-btn:hover{border-color:var(--accent);color:var(--accent)}
+.wf-item .wi-btn.use{background:var(--accent);color:#fff;border-color:var(--accent)}
+.wf-item .wi-btn.use:hover{background:var(--accent-hover)}
+
+/* Modal */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal{background:var(--bg-sidebar);border-radius:var(--radius);padding:20px;width:480px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.15)}
+.modal h3{font-size:16px;font-weight:600;margin-bottom:16px}
+.modal label{font-size:13px;font-weight:500;display:block;margin-bottom:4px;margin-top:12px}
+.modal input,.modal textarea{width:100%;border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;font-size:13px;background:var(--bg-input);color:var(--text);outline:none}
+.modal input:focus,.modal textarea:focus{border-color:var(--accent)}
+.modal textarea{min-height:80px;resize:vertical}
+.modal .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+.modal .btn-cancel{background:none;border:1px solid var(--border);padding:6px 16px;border-radius:var(--radius-sm);font-size:13px;cursor:pointer;color:var(--text-secondary)}
+.modal .btn-save{background:var(--accent);color:#fff;border:none;padding:6px 16px;border-radius:var(--radius-sm);font-size:13px;cursor:pointer}
 .empty-state .es-icon{font-size:48px;opacity:.3}
 .empty-state h3{font-size:18px;color:var(--text);font-weight:600}
 .empty-state p{font-size:14px;text-align:center;max-width:360px;line-height:1.5}
@@ -150,8 +194,38 @@ mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
       <button class="btn-icon" onclick="toggleTheme()" id="themeBtn" title="Dark mode">&#9790;</button>
       <button class="btn-new" onclick="newChat()" id="btnNew">+ New</button>
     </div>
-    <div class="search-bar"><input id="searchInput" placeholder="Search messages..." oninput="filterMessages(this.value)"></div>
-    <div class="thread-list" id="threadList"></div>
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" onclick="switchTab('chat',this)">&#128172; Chat</button>
+      <button class="sidebar-tab" onclick="switchTab('files',this)">&#128196; Files</button>
+      <button class="sidebar-tab" onclick="switchTab('workflows',this)">&#9889; Workflows</button>
+    </div>
+
+    <!-- Chat tab -->
+    <div class="tab-panel active" id="tab-chat">
+      <div class="search-bar"><input id="searchInput" placeholder="Search messages..." oninput="filterMessages(this.value)"></div>
+      <div class="thread-list" id="threadList"></div>
+    </div>
+
+    <!-- Files tab -->
+    <div class="tab-panel" id="tab-files">
+      <div style="padding:8px 10px;border-bottom:1px solid var(--border);display:flex;gap:6px">
+        <label style="flex:1;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;color:var(--accent)">
+          <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx" style="display:none" onchange="uploadAndRefreshFiles(this.files)">
+          &#8679; Upload file
+        </label>
+        <button class="btn-icon" onclick="loadFileManager()" title="Refresh">&#8635;</button>
+      </div>
+      <div class="file-manager" id="fileManager"><div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px">Loading files...</div></div>
+    </div>
+
+    <!-- Workflows tab -->
+    <div class="tab-panel" id="tab-workflows">
+      <div style="padding:8px 10px;border-bottom:1px solid var(--border);display:flex;gap:6px;align-items:center">
+        <span style="flex:1;font-size:13px;color:var(--text-secondary)">Workflow templates</span>
+        <button class="btn-icon" onclick="openWorkflowModal()" title="Create workflow">+</button>
+      </div>
+      <div class="wf-manager" id="wfManager"></div>
+    </div>
   </aside>
   <div class="main">
     <div class="chat-header">
@@ -376,8 +450,193 @@ async function applyWorkflow(w){
   }catch(e){alert('Workflow error: '+e.message);}
 }
 
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+function switchTab(name, btn) {
+  document.querySelectorAll('.sidebar-tab').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'files') loadFileManager();
+  if (name === 'workflows') loadWorkflowManager();
+}
+
+// ---------------------------------------------------------------------------
+// File Manager
+// ---------------------------------------------------------------------------
+let _fileManagerFiles = [];
+
+async function loadFileManager() {
+  const $fm = $('fileManager');
+  $fm.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px">Loading...</div>';
+  try {
+    const d = await api('/api/files');
+    _fileManagerFiles = d.files || [];
+    renderFileManager();
+  } catch (e) {
+    $fm.innerHTML = `<div style="padding:20px;text-align:center;color:#ef4444;font-size:13px">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderFileManager() {
+  const $fm = $('fileManager');
+  if (!_fileManagerFiles.length) {
+    $fm.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px">No files yet. Upload a file to get started.</div>';
+    return;
+  }
+  $fm.innerHTML = '';
+  _fileManagerFiles.forEach(f => {
+    const el = document.createElement('div');
+    el.className = 'file-item';
+    const thumb = f.thumbnail_url
+      ? `<img src="${f.thumbnail_url}" onerror="this.style.display='none'" alt="">`
+      : `<div class="fi-icon">&#128196;</div>`;
+    const size = f.size_bytes > 1048576 ? (f.size_bytes/1048576).toFixed(1)+'MB' : (f.size_bytes/1024).toFixed(0)+'KB';
+    const pages = f.page_count ? ` · ${f.page_count}p` : '';
+    el.innerHTML = `${thumb}
+      <div class="fi-info">
+        <div class="fi-name" title="${esc(f.orig_name)}">${esc(f.orig_name)}</div>
+        <div class="fi-meta">${size}${pages}</div>
+      </div>
+      <div class="fi-actions">
+        <button class="fi-btn" onclick="useFileInChat('${f.id}','${esc(f.orig_name)}','${f.mime_type}')" title="Use in chat">&#8599;</button>
+        <a class="fi-btn" href="${f.download_url}" download title="Download">&#8681;</a>
+        <button class="fi-btn" onclick="deleteFileFromManager('${f.id}')" title="Delete" style="color:#ef4444">&#128465;</button>
+      </div>`;
+    $fm.appendChild(el);
+  });
+}
+
+async function uploadAndRefreshFiles(fileList) {
+  for (const f of fileList) {
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      await fetch('/api/files', { method: 'POST', body: fd, headers: hdrs() });
+    } catch (e) { alert('Upload error: ' + e.message); }
+  }
+  loadFileManager();
+}
+
+async function deleteFileFromManager(fileId) {
+  if (!confirm('Delete this file?')) return;
+  try {
+    await api(`/api/files/${fileId}`, { method: 'DELETE' });
+    loadFileManager();
+  } catch (e) { alert('Delete failed: ' + e.message); }
+}
+
+function useFileInChat(fileId, name, mime) {
+  pendingFiles.push({ id: fileId, name, mime });
+  renderFileChips();
+  switchTab('chat', document.querySelectorAll('.sidebar-tab')[0]);
+}
+
+// ---------------------------------------------------------------------------
+// Workflow Manager
+// ---------------------------------------------------------------------------
+let _editingWorkflowId = null;
+
+async function loadWorkflowManager() {
+  const $wm = $('wfManager');
+  try {
+    const d = await api('/api/workflows');
+    $wm.innerHTML = '';
+    (d.workflows || []).forEach(w => {
+      const el = document.createElement('div');
+      el.className = 'wf-item';
+      const badge = w.builtin ? '<span class="wi-badge">built-in</span>' : '<span class="wi-badge" style="background:#dcfce7;color:#166534">custom</span>';
+      el.innerHTML = `
+        <div class="wi-header">
+          <span class="wi-name">${esc(w.name)}</span>${badge}
+        </div>
+        <div class="wi-desc">${esc(w.description || '')}</div>
+        <div class="wi-actions">
+          <button class="wi-btn use" onclick="applyWorkflowById('${w.id}')">&#9889; Use</button>
+          ${!w.builtin ? `<button class="wi-btn" onclick="editWorkflow('${w.id}')">Edit</button><button class="wi-btn" onclick="deleteWorkflowById('${w.id}')" style="color:#ef4444">Delete</button>` : ''}
+        </div>`;
+      $wm.appendChild(el);
+    });
+  } catch (e) {
+    $wm.innerHTML = `<div style="padding:20px;text-align:center;color:#ef4444;font-size:13px">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+async function applyWorkflowById(wfId) {
+  try {
+    const w = await api(`/api/workflows/${wfId}`);
+    await applyWorkflow(w);
+    switchTab('chat', document.querySelectorAll('.sidebar-tab')[0]);
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function deleteWorkflowById(wfId) {
+  if (!confirm('Delete this workflow?')) return;
+  try {
+    await api(`/api/workflows/${wfId}`, { method: 'DELETE' });
+    loadWorkflowManager();
+  } catch (e) { alert('Delete failed: ' + e.message); }
+}
+
+function openWorkflowModal(wf = null) {
+  _editingWorkflowId = wf ? wf.id : null;
+  $('wfModalTitle').textContent = wf ? 'Edit Workflow' : 'Create Workflow';
+  $('wfName').value = wf ? wf.name : '';
+  $('wfDesc').value = wf ? (wf.description || '') : '';
+  $('wfPrompt').value = wf ? wf.prompt_template : '';
+  $('wfModal').classList.add('open');
+}
+
+function closeWorkflowModal() {
+  $('wfModal').classList.remove('open');
+  _editingWorkflowId = null;
+}
+
+async function editWorkflow(wfId) {
+  try {
+    const w = await api(`/api/workflows/${wfId}`);
+    openWorkflowModal(w);
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function saveWorkflow() {
+  const name = $('wfName').value.trim();
+  const prompt = $('wfPrompt').value.trim();
+  if (!name || !prompt) { alert('Name and prompt template are required'); return; }
+  const body = { name, description: $('wfDesc').value.trim(), prompt_template: prompt };
+  try {
+    if (_editingWorkflowId) {
+      await api(`/api/workflows/${_editingWorkflowId}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    } else {
+      await api('/api/workflows', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    }
+    closeWorkflowModal();
+    loadWorkflowManager();
+  } catch (e) { alert('Save failed: ' + e.message); }
+}
+
+$('wfModal').addEventListener('click', e => { if (e.target === $('wfModal')) closeWorkflowModal(); });
+
 // Init
 loadThreads();loadWorkflows();$input.focus();
 </script>
+
+<!-- Workflow create/edit modal -->
+<div class="modal-overlay" id="wfModal">
+  <div class="modal">
+    <h3 id="wfModalTitle">Create Workflow</h3>
+    <label>Name</label>
+    <input id="wfName" placeholder="My workflow">
+    <label>Description</label>
+    <input id="wfDesc" placeholder="What does this workflow do?">
+    <label>Prompt template</label>
+    <textarea id="wfPrompt" placeholder="Use {param_name} for parameters. e.g. Rotate all pages by {angle} degrees."></textarea>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeWorkflowModal()">Cancel</button>
+      <button class="btn-save" onclick="saveWorkflow()">Save</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import queue
@@ -19,6 +20,38 @@ from pdf_agent.tools.base import BaseTool
 from pdf_agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Result cache — keyed by (tool_name, sha256(inputs), params_hash)
+# ---------------------------------------------------------------------------
+
+_result_cache: dict[str, str] = {}  # cache_key -> result string
+_cache_lock = threading.Lock()
+_MAX_CACHE = 256
+
+
+def _cache_key(tool_name: str, input_paths: list[Path], params: dict) -> str:
+    h = hashlib.sha256()
+    h.update(tool_name.encode())
+    for p in sorted(input_paths):
+        if p.exists():
+            h.update(p.read_bytes())
+    h.update(json.dumps(params, sort_keys=True).encode())
+    return h.hexdigest()
+
+
+def _get_cached(key: str) -> str | None:
+    with _cache_lock:
+        return _result_cache.get(key)
+
+
+def _set_cached(key: str, value: str) -> None:
+    with _cache_lock:
+        if len(_result_cache) >= _MAX_CACHE:
+            # Evict oldest (first inserted)
+            oldest = next(iter(_result_cache))
+            del _result_cache[oldest]
+        _result_cache[key] = value
 
 # ---------------------------------------------------------------------------
 # ParamSpec → Pydantic field mapping
@@ -163,6 +196,15 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
                     pass
 
         # --- Execute tool (async_hint=True → offload to thread pool with timeout) ---
+        # Check cache for cacheable (non-async_hint) tools
+        cache_key = None
+        if not manifest.async_hint:
+            cache_key = _cache_key(manifest.name, input_paths, params)
+            cached = _get_cached(cache_key)
+            if cached is not None:
+                logger.debug("Cache hit for %s", manifest.name)
+                return cached
+
         try:
             if manifest.async_hint:
                 result = await asyncio.wait_for(
@@ -198,7 +240,13 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
         if output_files:
             parts.append(f"Output files: {output_files}")
 
-        return "\n".join(parts) if parts else "Done (no output)."
+        result_str = "\n".join(parts) if parts else "Done (no output)."
+
+        # Store in cache for non-async tools
+        if cache_key is not None:
+            _set_cached(cache_key, result_str)
+
+        return result_str
 
     return async_wrapper
 

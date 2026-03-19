@@ -1,4 +1,4 @@
-"""Files API - upload and download files."""
+"""Files API - upload, list, download files."""
 from __future__ import annotations
 
 import uuid
@@ -6,16 +6,50 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pdf_agent.db import get_session
+from pdf_agent.db.models import FileRecord
 from pdf_agent.schemas.file import FileUploadResponse
 from pdf_agent.services import FileService
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
 
-@router.post("", response_model=FileUploadResponse)
+@router.get(
+    "",
+    summary="List uploaded files",
+    description="Returns all uploaded files ordered by most recent first.",
+)
+async def list_files(session: AsyncSession = Depends(get_session)) -> dict:
+    """List all uploaded files."""
+    result = await session.execute(
+        select(FileRecord).order_by(FileRecord.created_at.desc())
+    )
+    records = result.scalars().all()
+    files = [
+        {
+            "id": str(r.id),
+            "orig_name": r.orig_name,
+            "mime_type": r.mime_type,
+            "size_bytes": r.size_bytes,
+            "page_count": r.page_count,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "download_url": f"/api/files/{r.id}/download",
+            "thumbnail_url": f"/api/files/{r.id}/thumbnail" if r.mime_type == "application/pdf" else None,
+        }
+        for r in records
+    ]
+    return {"files": files, "count": len(files)}
+
+
+@router.post(
+    "",
+    response_model=FileUploadResponse,
+    summary="Upload a file",
+    description="Upload a PDF, image, or Office document. Returns file metadata including id for use with tools.",
+)
 async def upload_file(
     file: UploadFile,
     session: AsyncSession = Depends(get_session),
@@ -38,7 +72,32 @@ async def upload_file(
     )
 
 
-@router.get("/{file_id}/download")
+@router.delete(
+    "/{file_id}",
+    summary="Delete an uploaded file",
+)
+async def delete_file(
+    file_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """Delete an uploaded file from DB and disk."""
+    import shutil
+    result = await session.execute(select(FileRecord).where(FileRecord.id == file_id))
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+    file_dir = Path(record.storage_path).parent
+    if file_dir.exists():
+        shutil.rmtree(file_dir, ignore_errors=True)
+    await session.delete(record)
+    await session.commit()
+    return {"deleted": True, "id": str(file_id)}
+
+
+@router.get(
+    "/{file_id}/download",
+    summary="Download an uploaded file",
+)
 async def download_file(
     file_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
@@ -52,7 +111,11 @@ async def download_file(
     return FileResponse(path, filename=record.orig_name, media_type=record.mime_type)
 
 
-@router.get("/{file_id}/thumbnail")
+@router.get(
+    "/{file_id}/thumbnail",
+    summary="Get PDF thumbnail",
+    description="Returns a JPG thumbnail of the first page of an uploaded PDF.",
+)
 async def get_thumbnail(
     file_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
