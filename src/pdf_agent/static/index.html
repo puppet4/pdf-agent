@@ -103,8 +103,17 @@ mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
 .upload-zone.active{display:block}
 .upload-zone.dragover{border-color:var(--accent);background:rgba(79,70,229,.05)}
 .file-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
-.file-chip{display:inline-flex;align-items:center;gap:4px;background:rgba(79,70,229,.08);border:1px solid rgba(79,70,229,.2);color:var(--accent);padding:3px 10px;border-radius:16px;font-size:12px}
+.file-chip{display:inline-flex;align-items:center;gap:6px;background:rgba(79,70,229,.08);border:1px solid rgba(79,70,229,.2);color:var(--accent);padding:3px 6px 3px 3px;border-radius:8px;font-size:12px}
+.file-chip img{width:28px;height:36px;object-fit:cover;border-radius:4px;border:1px solid var(--border)}
+.file-chip .chip-name{max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-chip button{background:none;border:none;color:var(--accent);font-size:14px;line-height:1;padding:0 2px}
+
+/* Workflow selector */
+.workflow-bar{padding:6px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;overflow-x:auto;flex-shrink:0}
+.workflow-bar::-webkit-scrollbar{height:3px}
+.wf-btn{background:none;border:1px solid var(--border);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--text-secondary);white-space:nowrap;transition:all .15s;flex-shrink:0}
+.wf-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(79,70,229,.05)}
+.wf-label{font-size:11px;color:var(--text-secondary);flex-shrink:0;font-weight:500}
 .input-row{display:flex;gap:8px;align-items:flex-end}
 .input-row textarea{flex:1;resize:none;border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;line-height:1.4;max-height:120px;outline:none;transition:border-color .15s;background:var(--bg-input);color:var(--text)}
 .input-row textarea:focus{border-color:var(--accent)}
@@ -161,6 +170,7 @@ mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
       </div>
     </div>
     <div class="input-area">
+      <div class="workflow-bar" id="workflowBar"><span class="wf-label">&#9889;</span></div>
       <div class="upload-zone" id="uploadZone">Drop files here or <label style="color:var(--accent);cursor:pointer;text-decoration:underline"><input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.ppt,.pptx" style="display:none" onchange="handleFileSelect(this.files)">browse</label></div>
       <div class="file-chips" id="fileChips"></div>
       <div class="input-row">
@@ -244,8 +254,16 @@ function scrollBottom(){requestAnimationFrame(()=>{$messages.scrollTop=$messages
 
 // File upload
 function toggleUpload(){$uploadZone.classList.toggle('active');}
-async function handleFileSelect(fl){for(const f of fl){try{const fd=new FormData();fd.append('file',f);const r=await fetch('/api/files',{method:'POST',body:fd,headers:hdrs()});if(!r.ok)throw new Error('Upload failed');const d=await r.json();pendingFiles.push({id:d.id,name:d.orig_name});renderFileChips();}catch(e){alert('Upload error: '+e.message);}}$uploadZone.classList.remove('active');}
-function renderFileChips(){$fileChips.innerHTML='';pendingFiles.forEach((f,i)=>{const c=document.createElement('span');c.className='file-chip';c.innerHTML=`&#128196; ${esc(f.name)} <button onclick="removeFile(${i})">&times;</button>`;$fileChips.appendChild(c);});}
+async function handleFileSelect(fl){for(const f of fl){try{const fd=new FormData();fd.append('file',f);const r=await fetch('/api/files',{method:'POST',body:fd,headers:hdrs()});if(!r.ok)throw new Error('Upload failed');const d=await r.json();pendingFiles.push({id:d.id,name:d.orig_name,mime:d.mime_type});renderFileChips();}catch(e){alert('Upload error: '+e.message);}}$uploadZone.classList.remove('active');}
+function renderFileChips(){
+  $fileChips.innerHTML='';
+  pendingFiles.forEach((f,i)=>{
+    const c=document.createElement('span');c.className='file-chip';
+    const thumb=f.mime==='application/pdf'?`<img src="/api/files/${f.id}/thumbnail" onerror="this.style.display='none'" alt="">`:'&#128206;';
+    c.innerHTML=`${thumb}<span class="chip-name">${esc(f.name)}</span><button onclick="removeFile(${i})">&times;</button>`;
+    $fileChips.appendChild(c);
+  });
+}
 function removeFile(i){pendingFiles.splice(i,1);renderFileChips();}
 document.addEventListener('dragover',e=>{e.preventDefault();$uploadZone.classList.add('active','dragover');});
 document.addEventListener('dragleave',e=>{if(!e.relatedTarget||e.relatedTarget===document.documentElement)$uploadZone.classList.remove('dragover');});
@@ -278,7 +296,7 @@ async function sendMessage(){
         case'thread':currentThreadId=d.thread_id;$chatTitle.textContent=d.thread_id.slice(0,12)+'...';break;
         case'token':if(!streamBubble)streamBubble=addStreamingBubble();streamText+=d.content;streamBubble.innerHTML=renderMd(streamText);scrollBottom();break;
         case'tool_start':if(streamBubble&&streamText){streamBubble.innerHTML=renderMd(streamText);streamBubble.parentElement.dataset.text=streamText;chatHistory.push({role:'agent',content:streamText});streamBubble=null;streamText='';}activeCard=addToolCard(d.tool,d.args,'',[]  ,null,false);break;
-        case'tool_progress':if(activeCard){const s=activeCard.querySelector('.tc-status');if(s)s.textContent=`Running... ${d.elapsed_seconds}s`;}break;
+        case'tool_progress':if(activeCard){const s=activeCard.querySelector('.tc-status');if(s){const pct=d.percent!=null?` ${d.percent}%`:'';const msg=d.message?` — ${d.message}`:'';s.textContent=`Running...${pct}${msg} ${d.elapsed_seconds||''}s`;}}break;
         case'tool_end':if(activeCard){const p=activeCard.parentElement||$messages;const nc=document.createElement('div');nc.className='tool-card';const ae=activeCard.querySelector('.tc-args');const at=ae?ae.textContent:'';let fh='';if(d.files&&d.files.length)fh='<div class="tc-files">'+d.files.map(f=>`<a href="${f}" download>&#128196; ${f.split('/').pop()}</a>`).join('')+'</div>';const st=d.elapsed_seconds!=null?`Done (${d.elapsed_seconds}s)`:'Done';nc.innerHTML=`<div class="tc-header" onclick="this.parentElement.classList.toggle('expanded')"><div class="tc-icon">T</div><span class="tc-name">${esc(d.tool)}</span><span class="tc-status">${st}</span><span class="tc-chevron">&#9654;</span></div><div class="tc-body">${at?`<div class="tc-args-label">Args</div><div class="tc-args">${esc(at)}</div>`:''}${d.output?`<div class="tc-output-label">Output</div><div class="tc-output">${esc(d.output)}</div>`:''}${fh}</div>`;$messages.replaceChild(nc,activeCard);activeCard=null;chatHistory.push({role:'tool',name:d.tool,content:d.output});}break;
         case'error':addMessage('agent','Error: '+d.message);break;
         case'done':if(streamBubble&&streamText){streamBubble.innerHTML=renderMd(streamText);streamBubble.parentElement.dataset.text=streamText;chatHistory.push({role:'agent',content:streamText});}break;
@@ -316,8 +334,50 @@ function toggleSidebar(){$('sidebar').classList.toggle('open');}
 function renderMd(t){if(!t)return'';let h=esc(t);h=h.replace(/```(\w*)\n([\s\S]*?)```/g,(_,l,c)=>`<pre><code>${c}</code></pre>`);h=h.replace(/`([^`]+)`/g,'<code>$1</code>');h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');h=h.replace(/\*(.+?)\*/g,'<em>$1</em>');h=h.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');h=h.replace(/\n\n+/g,'</p><p>');h=h.replace(/\n/g,'<br>');return'<p>'+h+'</p>';}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 
+// Workflows
+async function loadWorkflows(){
+  try{
+    const d=await api('/api/workflows');
+    const bar=$('workflowBar');
+    (d.workflows||[]).forEach(w=>{
+      const btn=document.createElement('button');
+      btn.className='wf-btn';
+      btn.textContent=w.name;
+      btn.title=w.description;
+      btn.onclick=()=>applyWorkflow(w);
+      bar.appendChild(btn);
+    });
+  }catch{}
+}
+async function applyWorkflow(w){
+  if(!w.params||w.params.length===0){
+    // No params needed, just set the prompt
+    $input.value=w.prompt_template;
+    autoResize($input);
+    $input.focus();
+    return;
+  }
+  // Collect params via prompts
+  const values={};
+  for(const p of w.params){
+    const val=prompt(`${p.label}${p.default?' (default: '+p.default+')':''}:`,p.default||'');
+    if(val===null)return;
+    values[p.name]=val||p.default||'';
+  }
+  try{
+    const d=await api(`/api/workflows/${w.id}/render`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({workflow_id:w.id,params:values,file_ids:pendingFiles.map(f=>f.id)}),
+    });
+    $input.value=d.prompt;
+    autoResize($input);
+    $input.focus();
+  }catch(e){alert('Workflow error: '+e.message);}
+}
+
 // Init
-loadThreads();$input.focus();
+loadThreads();loadWorkflows();$input.focus();
 </script>
 </body>
 </html>

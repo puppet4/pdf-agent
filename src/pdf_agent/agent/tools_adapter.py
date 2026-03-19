@@ -1,8 +1,11 @@
 """Adapt existing BaseTool instances to LangChain StructuredTool for LangGraph."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import queue
+import threading
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -80,6 +83,27 @@ def _build_args_schema(manifest: ToolManifest) -> type[BaseModel]:
 
 
 # ---------------------------------------------------------------------------
+# SSE progress queue — keyed by thread_id
+# ---------------------------------------------------------------------------
+
+# Maps thread_id -> queue of (percent, message) progress updates
+_progress_queues: dict[str, queue.Queue] = {}
+_progress_lock = threading.Lock()
+
+
+def get_progress_queue(thread_id: str) -> queue.Queue:
+    with _progress_lock:
+        if thread_id not in _progress_queues:
+            _progress_queues[thread_id] = queue.Queue(maxsize=100)
+        return _progress_queues[thread_id]
+
+
+def release_progress_queue(thread_id: str):
+    with _progress_lock:
+        _progress_queues.pop(thread_id, None)
+
+
+# ---------------------------------------------------------------------------
 # Wrapper that bridges LangChain tool call → BaseTool.run()
 # ---------------------------------------------------------------------------
 
@@ -88,9 +112,12 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
 
     The custom tool node injects 'state' and 'tool_call_id' into kwargs
     before calling this wrapper. They are NOT part of the args_schema.
+
+    Long-running tools (async_hint=True) are executed in a thread pool
+    via asyncio.to_thread() to avoid blocking the event loop.
     """
 
-    def wrapper(**kwargs: Any) -> str:
+    async def async_wrapper(**kwargs: Any) -> str:
         state: AgentState = kwargs.pop("state", {})
         kwargs.pop("tool_call_id", None)
 
@@ -121,9 +148,36 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
             elif p.default is not None:
                 params[p.name] = p.default
 
-        # --- Execute tool ---
+        # --- Build progress reporter that pushes to SSE queue ---
+        thread_id = state.get("configurable", {}).get("thread_id", "") if isinstance(state, dict) else ""
+        prog_queue: queue.Queue | None = None
+        if thread_id:
+            prog_queue = get_progress_queue(thread_id)
+
+        def reporter(percent: int, message: str = "") -> None:
+            if prog_queue:
+                try:
+                    prog_queue.put_nowait({"percent": percent, "message": message})
+                except queue.Full:
+                    pass
+
+        # --- Execute tool (async_hint=True → offload to thread pool) ---
         try:
-            result = tool.run(inputs=input_paths, params=params, workdir=step_dir)
+            if manifest.async_hint:
+                result = await asyncio.to_thread(
+                    tool.run,
+                    inputs=input_paths,
+                    params=params,
+                    workdir=step_dir,
+                    reporter=reporter,
+                )
+            else:
+                result = tool.run(
+                    inputs=input_paths,
+                    params=params,
+                    workdir=step_dir,
+                    reporter=reporter,
+                )
         except Exception as e:
             logger.exception("Tool %s failed", manifest.name)
             return f"Error executing {manifest.name}: {e}"
@@ -140,7 +194,7 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
 
         return "\n".join(parts) if parts else "Done (no output)."
 
-    return wrapper
+    return async_wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +214,7 @@ def adapt_all_tools(registry: ToolRegistry) -> list[StructuredTool]:
             name=manifest.name,
             description=manifest.description or manifest.label,
             args_schema=args_schema,
-            func=wrapper,
+            coroutine=wrapper,  # async wrapper
         )
         tools.append(lc_tool)
 

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pdf_agent.db import get_session
@@ -42,13 +44,23 @@ async def download_file(
     session: AsyncSession = Depends(get_session),
 ):
     """Download an uploaded file."""
-    from fastapi.responses import FileResponse
-
     svc = FileService(session)
     record = await svc.get(file_id)
-    from pathlib import Path
-
     path = Path(record.storage_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
     return FileResponse(path, filename=record.orig_name, media_type=record.mime_type)
+
+
+@router.get("/{file_id}/thumbnail")
+async def get_thumbnail(
+    file_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """Return the thumbnail image for an uploaded PDF (JPG)."""
+    svc = FileService(session)
+    record = await svc.get(file_id)
+    thumb_path = Path(record.storage_path).parent / "thumbnail.jpg"
+    if not thumb_path.exists():
+        raise HTTPException(status_code=404, detail="Thumbnail not available")
+    return FileResponse(thumb_path, media_type="image/jpeg")

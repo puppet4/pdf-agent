@@ -136,6 +136,7 @@ class TestParamToPydantic:
 
 class TestToolWrapper:
     def test_wrapper_executes_and_returns_result(self, dummy_registry, tmp_path):
+        import asyncio
         from pdf_agent.agent.tools_adapter import adapt_all_tools
 
         tools = adapt_all_tools(dummy_registry)
@@ -154,17 +155,18 @@ class TestToolWrapper:
             "step_counter": 0,
         }
 
-        # Call underlying func directly (same as custom tool node does)
-        result = dummy_tool.func(
+        # Call underlying coroutine directly (same as custom tool node does)
+        result = asyncio.run(dummy_tool.coroutine(
             text="hello",
             state=state,
             tool_call_id="test-call-1",
-        )
+        ))
 
         assert "Processed with text=hello" in result
         assert "output.pdf" in result
 
     def test_wrapper_returns_error_on_missing_input(self, dummy_registry, tmp_path):
+        import asyncio
         from pdf_agent.agent.tools_adapter import adapt_all_tools
 
         tools = adapt_all_tools(dummy_registry)
@@ -178,11 +180,11 @@ class TestToolWrapper:
             "step_counter": 0,
         }
 
-        result = dummy_tool.func(
+        result = asyncio.run(dummy_tool.coroutine(
             text="hello",
             state=state,
             tool_call_id="test-call-2",
-        )
+        ))
 
         assert "Error" in result
         assert "at least 1" in result

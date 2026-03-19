@@ -124,7 +124,7 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
             tool_args["tool_call_id"] = call_id
 
             try:
-                result_str = lc_tool.func(**tool_args)
+                result_str = await lc_tool.coroutine(**tool_args)
             except Exception as e:
                 logger.exception("Tool %s raised exception", tool_name)
                 result_str = f"Error: {e}"

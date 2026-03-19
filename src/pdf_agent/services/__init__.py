@@ -1,6 +1,8 @@
 """File service - handles file upload and retrieval with validation."""
 from __future__ import annotations
 
+import shutil
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -42,6 +44,30 @@ def _validate_magic_bytes(content: bytes, declared_mime: str) -> bool:
     return any(content[:len(sig)] == sig for sig in sigs)
 
 
+def _generate_thumbnail(pdf_path: Path, thumb_path: Path, size: int = 200) -> bool:
+    """Generate a thumbnail for the first page of a PDF using poppler pdftoppm."""
+    pdftoppm = shutil.which("pdftoppm")
+    if not pdftoppm:
+        return False
+    try:
+        subprocess.run(
+            [pdftoppm, "-r", "72", "-jpeg", "-f", "1", "-l", "1", "-scale-to", str(size),
+             str(pdf_path), str(thumb_path.with_suffix(""))],
+            capture_output=True, timeout=30,
+        )
+        # pdftoppm outputs file as <stem>-1.jpg
+        candidate = thumb_path.with_name(thumb_path.stem + "-1.jpg")
+        if candidate.exists():
+            candidate.rename(thumb_path)
+            return True
+        # Try without page suffix
+        if thumb_path.exists():
+            return True
+        return False
+    except Exception:
+        return False
+
+
 class FileService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -71,6 +97,11 @@ class FileService:
                     page_count = len(pdf.pages)
             except Exception:
                 pass
+
+        # Generate thumbnail for PDFs
+        thumb_path = path.parent / "thumbnail.jpg"
+        if content_type == "application/pdf":
+            _generate_thumbnail(path, thumb_path)
 
         record = FileRecord(
             id=file_id,
