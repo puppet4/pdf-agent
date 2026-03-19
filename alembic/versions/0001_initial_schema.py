@@ -24,11 +24,11 @@ artifacttype_enum = sa.Enum('input', 'intermediate', 'output', name='artifacttyp
 
 
 def upgrade() -> None:
-    # Create enums
-    jobstatus_enum.create(op.get_bind(), checkfirst=True)
-    jobmode_enum.create(op.get_bind(), checkfirst=True)
-    stepstatus_enum.create(op.get_bind(), checkfirst=True)
-    artifacttype_enum.create(op.get_bind(), checkfirst=True)
+    # Create enums (IF NOT EXISTS for idempotency)
+    op.execute("CREATE TYPE IF NOT EXISTS jobstatus AS ENUM ('PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'CANCELED')")
+    op.execute("CREATE TYPE IF NOT EXISTS jobmode AS ENUM ('FORM', 'AGENT')")
+    op.execute("CREATE TYPE IF NOT EXISTS stepstatus AS ENUM ('PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'SKIPPED')")
+    op.execute("CREATE TYPE IF NOT EXISTS artifacttype AS ENUM ('input', 'intermediate', 'output')")
 
     # files
     op.create_table(
