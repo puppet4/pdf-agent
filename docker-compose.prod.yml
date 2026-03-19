@@ -1,0 +1,69 @@
+# Production docker-compose — uses Dockerfile.prod, restricts CORS, adds restart policies
+# Usage: docker compose -f docker-compose.prod.yml up -d
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn pdf_agent.main:app
+             --host 0.0.0.0 --port 8000
+             --workers 2 --log-level warning --access-log"
+    ports:
+      - "127.0.0.1:8000:8000"   # bind to localhost only; use a reverse proxy
+    environment:
+      PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@db:5432/pdf_agent
+      PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/pdf_agent
+      PDF_AGENT_OPENAI_API_KEY: ${PDF_AGENT_OPENAI_API_KEY}
+      PDF_AGENT_OPENAI_BASE_URL: ${PDF_AGENT_OPENAI_BASE_URL:-}
+      PDF_AGENT_OPENAI_MODEL: ${PDF_AGENT_OPENAI_MODEL:-gpt-4o}
+      PDF_AGENT_DATA_DIR: /app/data
+      PDF_AGENT_DEBUG: "false"
+      # Auth
+      PDF_AGENT_API_KEY: ${PDF_AGENT_API_KEY:-}
+      PDF_AGENT_JWT_SECRET: ${PDF_AGENT_JWT_SECRET:-}
+      # CORS — restrict to your domain(s)
+      PDF_AGENT_CORS_ORIGINS: ${PDF_AGENT_CORS_ORIGINS:-https://yourdomain.com}
+      # Rate limiting
+      PDF_AGENT_RATE_LIMIT_RPM: ${PDF_AGENT_RATE_LIMIT_RPM:-20}
+      # Observability
+      PDF_AGENT_SENTRY_DSN: ${PDF_AGENT_SENTRY_DSN:-}
+      PDF_AGENT_LANGSMITH_API_KEY: ${PDF_AGENT_LANGSMITH_API_KEY:-}
+      PDF_AGENT_LANGSMITH_PROJECT: ${PDF_AGENT_LANGSMITH_PROJECT:-pdf-agent}
+      # i18n
+      PDF_AGENT_DEFAULT_LOCALE: ${PDF_AGENT_DEFAULT_LOCALE:-en}
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    user: pdfagent
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: pdf_agent
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    # Do NOT expose port 5432 to host in production
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  app_data:
+  pg_data:

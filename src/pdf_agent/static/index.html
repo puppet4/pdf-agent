@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,7 +7,7 @@
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#f7f8fa;--bg-sidebar:#fff;--bg-chat:#f7f8fa;--bg-input:#fff;
+  --bg:#f7f8fa;--bg-sidebar:#fff;--bg-input:#fff;
   --bg-user:#4f46e5;--bg-agent:#fff;--bg-tool:#f1f5f9;
   --text:#1e293b;--text-secondary:#64748b;--text-user:#fff;--text-agent:#1e293b;
   --border:#e2e8f0;--accent:#4f46e5;--accent-hover:#4338ca;
@@ -15,53 +15,67 @@
   --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   --mono:"SF Mono",SFMono-Regular,Consolas,"Liberation Mono",monospace;
 }
+[data-theme="dark"]{
+  --bg:#0f172a;--bg-sidebar:#1e293b;--bg-input:#1e293b;
+  --bg-user:#4f46e5;--bg-agent:#1e293b;--bg-tool:#0f172a;
+  --text:#e2e8f0;--text-secondary:#94a3b8;--text-user:#fff;--text-agent:#e2e8f0;
+  --border:#334155;--accent:#818cf8;--accent-hover:#6366f1;
+  --shadow:0 1px 3px rgba(0,0,0,.3);
+}
 html,body{height:100%;font-family:var(--font);color:var(--text);background:var(--bg)}
 button{cursor:pointer;font-family:inherit}
-input,textarea{font-family:inherit}
+input,textarea{font-family:inherit;background:var(--bg-input);color:var(--text)}
 
-/* Layout */
 .app{display:flex;height:100vh;overflow:hidden}
 .sidebar{width:280px;background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
 .main{flex:1;display:flex;flex-direction:column;min-width:0}
 
 /* Sidebar */
-.sidebar-header{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
-.sidebar-header h2{font-size:16px;font-weight:600;flex:1}
-.btn-new{background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;transition:background .15s}
+.sidebar-header{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px}
+.sidebar-header h2{font-size:15px;font-weight:600;flex:1}
+.btn-new{background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;transition:background .15s}
 .btn-new:hover{background:var(--accent-hover)}
-.thread-list{flex:1;overflow-y:auto;padding:8px}
-.thread-item{padding:10px 12px;border-radius:var(--radius-sm);cursor:pointer;display:flex;align-items:center;gap:8px;margin-bottom:2px;transition:background .1s}
-.thread-item:hover{background:#f1f5f9}
+.btn-icon{background:none;border:1px solid var(--border);color:var(--text-secondary);width:30px;height:30px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;font-size:14px;transition:all .15s;flex-shrink:0}
+.btn-icon:hover{border-color:var(--accent);color:var(--accent)}
+
+.search-bar{padding:8px 10px;border-bottom:1px solid var(--border)}
+.search-bar input{width:100%;border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;font-size:13px;outline:none;background:var(--bg);color:var(--text)}
+.search-bar input:focus{border-color:var(--accent)}
+
+.thread-list{flex:1;overflow-y:auto;padding:6px}
+.thread-item{padding:9px 11px;border-radius:var(--radius-sm);cursor:pointer;display:flex;align-items:center;gap:8px;margin-bottom:2px;transition:background .1s}
+.thread-item:hover{background:var(--bg-tool)}
 .thread-item.active{background:#eef2ff;color:var(--accent)}
+[data-theme="dark"] .thread-item.active{background:#1e1b4b}
 .thread-item .ti-text{flex:1;min-width:0}
 .thread-item .ti-id{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .thread-item .ti-meta{font-size:11px;color:var(--text-secondary)}
-.thread-item .ti-del{opacity:0;background:none;border:none;color:#ef4444;font-size:16px;padding:2px 4px;border-radius:4px;transition:opacity .15s}
+.thread-item .ti-del{opacity:0;background:none;border:none;color:#ef4444;font-size:16px;padding:2px 4px;border-radius:4px;transition:opacity .15s;flex-shrink:0}
 .thread-item:hover .ti-del{opacity:.6}
 .thread-item .ti-del:hover{opacity:1;background:#fee2e2}
 
 /* Chat header */
-.chat-header{padding:12px 20px;border-bottom:1px solid var(--border);background:var(--bg-sidebar);display:flex;align-items:center;gap:12px;min-height:52px}
-.chat-header h3{font-size:15px;font-weight:600;flex:1}
-.chat-header .file-count{font-size:12px;color:var(--text-secondary);background:#f1f5f9;padding:2px 8px;border-radius:10px}
+.chat-header{padding:10px 18px;border-bottom:1px solid var(--border);background:var(--bg-sidebar);display:flex;align-items:center;gap:10px;min-height:50px}
+.chat-header h3{font-size:14px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.header-actions{display:flex;gap:6px}
 
 /* Messages */
-.messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+.messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
 .msg{max-width:80%;display:flex;flex-direction:column;gap:4px;animation:fadeIn .2s ease}
+.msg.hidden{display:none}
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .msg.user{align-self:flex-end}
 .msg.agent{align-self:flex-start}
 .msg-bubble{padding:10px 14px;border-radius:var(--radius);line-height:1.55;font-size:14px;word-break:break-word;box-shadow:var(--shadow)}
 .msg.user .msg-bubble{background:var(--bg-user);color:var(--text-user);border-bottom-right-radius:4px}
 .msg.agent .msg-bubble{background:var(--bg-agent);color:var(--text-agent);border-bottom-left-radius:4px}
-.msg-bubble p{margin:0 0 8px}
-.msg-bubble p:last-child{margin-bottom:0}
-.msg-bubble code{font-family:var(--mono);font-size:13px;background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px}
-.msg-bubble pre{background:#1e293b;color:#e2e8f0;padding:12px;border-radius:var(--radius-sm);overflow-x:auto;margin:8px 0;font-size:13px}
+.msg-bubble p{margin:0 0 8px}.msg-bubble p:last-child{margin-bottom:0}
+.msg-bubble code{font-family:var(--mono);font-size:12px;background:rgba(0,0,0,.08);padding:1px 4px;border-radius:3px}
+.msg-bubble pre{background:#1e293b;color:#e2e8f0;padding:12px;border-radius:var(--radius-sm);overflow-x:auto;margin:8px 0;font-size:12px}
 .msg-bubble pre code{background:none;padding:0;color:inherit}
 .msg-bubble a{color:var(--accent);text-decoration:underline}
 .msg.user .msg-bubble code{background:rgba(255,255,255,.2)}
-.msg-label{font-size:11px;color:var(--text-secondary);padding:0 4px}
+mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
 
 /* Tool cards */
 .tool-card{background:var(--bg-tool);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;font-size:13px;max-width:80%;align-self:flex-start;animation:fadeIn .2s ease}
@@ -76,24 +90,23 @@ input,textarea{font-family:inherit}
 .tool-card .tc-args,.tool-card .tc-output{font-family:var(--mono);font-size:12px;white-space:pre-wrap;color:var(--text-secondary);margin:4px 0}
 .tool-card .tc-args-label,.tool-card .tc-output-label{font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
 .tool-card .tc-files{margin-top:6px;display:flex;flex-wrap:wrap;gap:6px}
-.tool-card .tc-files a{display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--accent);text-decoration:none;transition:border-color .15s}
+.tool-card .tc-files a{display:inline-flex;align-items:center;gap:4px;background:var(--bg-sidebar);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--accent);text-decoration:none;transition:border-color .15s}
 .tool-card .tc-files a:hover{border-color:var(--accent)}
 
-/* Progress bar */
-.progress-bar{height:3px;background:#e2e8f0;border-radius:2px;margin-top:6px;overflow:hidden}
-.progress-bar .progress-fill{height:100%;background:var(--accent);border-radius:2px;transition:width .3s;animation:indeterminate 1.5s ease-in-out infinite}
+.progress-bar{height:3px;background:var(--border);border-radius:2px;margin-top:6px;overflow:hidden}
+.progress-bar .progress-fill{height:100%;background:var(--accent);border-radius:2px;animation:indeterminate 1.5s ease-in-out infinite}
 @keyframes indeterminate{0%{width:0;margin-left:0}50%{width:40%;margin-left:30%}100%{width:0;margin-left:100%}}
 
 /* Input area */
-.input-area{padding:12px 20px 16px;border-top:1px solid var(--border);background:var(--bg-sidebar)}
-.upload-zone{border:2px dashed var(--border);border-radius:var(--radius-sm);padding:12px;text-align:center;font-size:13px;color:var(--text-secondary);margin-bottom:8px;transition:border-color .15s,background .15s;display:none}
+.input-area{padding:12px 18px 14px;border-top:1px solid var(--border);background:var(--bg-sidebar)}
+.upload-zone{border:2px dashed var(--border);border-radius:var(--radius-sm);padding:12px;text-align:center;font-size:13px;color:var(--text-secondary);margin-bottom:8px;transition:all .15s;display:none}
 .upload-zone.active{display:block}
-.upload-zone.dragover{border-color:var(--accent);background:#eef2ff}
+.upload-zone.dragover{border-color:var(--accent);background:rgba(79,70,229,.05)}
 .file-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
-.file-chip{display:inline-flex;align-items:center;gap:4px;background:#eef2ff;border:1px solid #c7d2fe;color:var(--accent);padding:3px 10px;border-radius:16px;font-size:12px}
+.file-chip{display:inline-flex;align-items:center;gap:4px;background:rgba(79,70,229,.08);border:1px solid rgba(79,70,229,.2);color:var(--accent);padding:3px 10px;border-radius:16px;font-size:12px}
 .file-chip button{background:none;border:none;color:var(--accent);font-size:14px;line-height:1;padding:0 2px}
 .input-row{display:flex;gap:8px;align-items:flex-end}
-.input-row textarea{flex:1;resize:none;border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;line-height:1.4;max-height:120px;outline:none;transition:border-color .15s}
+.input-row textarea{flex:1;resize:none;border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;line-height:1.4;max-height:120px;outline:none;transition:border-color .15s;background:var(--bg-input);color:var(--text)}
 .input-row textarea:focus{border-color:var(--accent)}
 .btn-send{background:var(--accent);color:#fff;border:none;width:40px;height:40px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;transition:background .15s;flex-shrink:0}
 .btn-send:hover{background:var(--accent-hover)}
@@ -115,44 +128,40 @@ input,textarea{font-family:inherit}
 }
 .menu-toggle{display:none;background:none;border:none;font-size:20px;padding:4px 8px;color:var(--text)}
 
-/* Scrollbar */
-::-webkit-scrollbar{width:6px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:3px}
-::-webkit-scrollbar-thumb:hover{background:#9ca3af}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:3px}::-webkit-scrollbar-thumb:hover{background:#9ca3af}
+[data-theme="dark"] ::-webkit-scrollbar-thumb{background:#475569}
 </style>
 </head>
 <body>
 <div class="app">
-  <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <h2>PDF Agent</h2>
-      <button class="btn-new" onclick="newChat()">+ New</button>
+      <h2 id="appTitle">PDF Agent</h2>
+      <button class="btn-icon" onclick="toggleTheme()" id="themeBtn" title="Dark mode">&#9790;</button>
+      <button class="btn-new" onclick="newChat()" id="btnNew">+ New</button>
     </div>
+    <div class="search-bar"><input id="searchInput" placeholder="Search messages..." oninput="filterMessages(this.value)"></div>
     <div class="thread-list" id="threadList"></div>
   </aside>
-
-  <!-- Main -->
   <div class="main">
     <div class="chat-header">
       <button class="menu-toggle" onclick="toggleSidebar()">&#9776;</button>
       <h3 id="chatTitle">New Chat</h3>
-      <span class="file-count" id="fileCount" style="display:none"></span>
+      <div class="header-actions">
+        <button class="btn-icon" onclick="exportChat('md')" title="Export Markdown">&#8681;</button>
+        <button class="btn-icon" onclick="exportChat('json')" title="Export JSON">{ }</button>
+      </div>
     </div>
-
     <div class="messages" id="messages">
       <div class="empty-state" id="emptyState">
         <div class="es-icon">&#128196;</div>
-        <h3>PDF Agent Toolbox</h3>
-        <p>Upload a PDF and tell me what you'd like to do. I can rotate, merge, split, compress, watermark, OCR, and much more.</p>
+        <h3 id="emptyTitle">PDF Agent Toolbox</h3>
+        <p id="emptyDesc">Upload a PDF and tell me what you'd like to do. I can rotate, merge, split, compress, watermark, OCR, and much more.</p>
       </div>
     </div>
-
     <div class="input-area">
-      <div class="upload-zone" id="uploadZone">
-        Drop files here or <label style="color:var(--accent);cursor:pointer;text-decoration:underline"><input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.ppt,.pptx" style="display:none" onchange="handleFileSelect(this.files)">browse</label>
-      </div>
+      <div class="upload-zone" id="uploadZone">Drop files here or <label style="color:var(--accent);cursor:pointer;text-decoration:underline"><input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.ppt,.pptx" style="display:none" onchange="handleFileSelect(this.files)">browse</label></div>
       <div class="file-chips" id="fileChips"></div>
       <div class="input-row">
         <button class="btn-attach" onclick="toggleUpload()" title="Attach files">&#128206;</button>
@@ -162,453 +171,153 @@ input,textarea{font-family:inherit}
     </div>
   </div>
 </div>
-
 <script>
-// ---------------------------------------------------------------------------
 // State
-// ---------------------------------------------------------------------------
-let currentThreadId = null;
-let pendingFiles = [];      // [{id, name}]  — uploaded file refs
-let isStreaming = false;
+let currentThreadId = null, pendingFiles = [], isStreaming = false, chatHistory = [];
 let apiKey = localStorage.getItem('pdf_agent_api_key') || '';
+const $ = id => document.getElementById(id);
+const $messages = $('messages'), $input = $('msgInput'), $threadList = $('threadList');
+const $emptyState = $('emptyState'), $fileChips = $('fileChips'), $chatTitle = $('chatTitle');
+const $uploadZone = $('uploadZone');
 
-const $messages = document.getElementById('messages');
-const $input = document.getElementById('msgInput');
-const $threadList = document.getElementById('threadList');
-const $emptyState = document.getElementById('emptyState');
-const $fileChips = document.getElementById('fileChips');
-const $chatTitle = document.getElementById('chatTitle');
-const $fileCount = document.getElementById('fileCount');
-const $uploadZone = document.getElementById('uploadZone');
+// API
+function hdrs(extra={}) { const h={...extra}; if(apiKey) h['X-API-Key']=apiKey; return h; }
+async function api(path,opts={}) { opts.headers=hdrs(opts.headers||{}); const r=await fetch(path,opts); if(!r.ok){const b=await r.json().catch(()=>({}));throw new Error(b.detail||`HTTP ${r.status}`);}return r.json();}
 
-// ---------------------------------------------------------------------------
-// API helpers
-// ---------------------------------------------------------------------------
-function headers(extra = {}) {
-  const h = { ...extra };
-  if (apiKey) h['X-API-Key'] = apiKey;
-  return h;
+// Theme
+function toggleTheme() {
+  const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem('pdf_agent_theme', t);
+  $('themeBtn').innerHTML = t==='dark' ? '&#9788;' : '&#9790;';
+  $('themeBtn').title = t==='dark' ? 'Light mode' : 'Dark mode';
 }
+(function(){const t=localStorage.getItem('pdf_agent_theme');if(t){document.documentElement.dataset.theme=t;if(t==='dark')$('themeBtn').innerHTML='&#9788;';}})();
 
-async function api(path, opts = {}) {
-  opts.headers = headers(opts.headers || {});
-  const res = await fetch(path, opts);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `HTTP ${res.status}`);
-  }
-  return res.json();
-}
-
-// ---------------------------------------------------------------------------
 // Threads
-// ---------------------------------------------------------------------------
-async function loadThreads() {
-  try {
-    const data = await api('/api/agent/threads');
-    renderThreadList(data.threads || []);
-  } catch { /* ignore on first load */ }
+async function loadThreads(){try{const d=await api('/api/agent/threads');renderThreadList(d.threads||[]);}catch{}}
+function renderThreadList(threads){
+  $threadList.innerHTML='';
+  threads.forEach(t=>{const el=document.createElement('div');el.className='thread-item'+(t.thread_id===currentThreadId?' active':'');
+    const s=t.thread_id.slice(0,8),d=new Date(t.updated_at*1000).toLocaleString();
+    el.innerHTML=`<div class="ti-text" onclick="openThread('${t.thread_id}')"><div class="ti-id">${s}...</div><div class="ti-meta">${d}</div></div><button class="ti-del" onclick="event.stopPropagation();deleteThread('${t.thread_id}')" title="Delete">&times;</button>`;
+    $threadList.appendChild(el);});
 }
-
-function renderThreadList(threads) {
-  $threadList.innerHTML = '';
-  threads.forEach(t => {
-    const el = document.createElement('div');
-    el.className = 'thread-item' + (t.thread_id === currentThreadId ? ' active' : '');
-    const short = t.thread_id.slice(0, 8);
-    const date = new Date(t.updated_at * 1000).toLocaleString();
-    el.innerHTML = `
-      <div class="ti-text" onclick="openThread('${t.thread_id}')">
-        <div class="ti-id">${short}...</div>
-        <div class="ti-meta">${date} &middot; ${t.step_count} steps</div>
-      </div>
-      <button class="ti-del" onclick="event.stopPropagation();deleteThread('${t.thread_id}')" title="Delete">&times;</button>`;
-    $threadList.appendChild(el);
-  });
-}
-
-async function openThread(threadId) {
-  currentThreadId = threadId;
-  $chatTitle.textContent = threadId.slice(0, 12) + '...';
-  clearMessages();
-
-  try {
-    const data = await api(`/api/agent/threads/${threadId}`);
-    (data.messages || []).forEach(m => {
-      if (m.type === 'human') addMessage('user', m.content);
-      else if (m.type === 'ai' && m.content) addMessage('agent', m.content);
-      else if (m.type === 'tool' && m.content) {
-        addToolCard(m.name || 'tool', {}, m.content, [], null, true);
-      }
+async function openThread(tid){
+  currentThreadId=tid;$chatTitle.textContent=tid.slice(0,12)+'...';clearMessages();chatHistory=[];
+  try{const d=await api(`/api/agent/threads/${tid}`);
+    (d.messages||[]).forEach(m=>{
+      if(m.type==='human'){addMessage('user',m.content);chatHistory.push({role:'user',content:m.content});}
+      else if(m.type==='ai'&&m.content){addMessage('agent',m.content);chatHistory.push({role:'agent',content:m.content});}
+      else if(m.type==='tool'&&m.content){addToolCard(m.name||'tool',{},m.content,[],null,true);chatHistory.push({role:'tool',name:m.name,content:m.content});}
     });
-    // Load thread files count
-    const fdata = await api(`/api/agent/threads/${threadId}/files`);
-    if (fdata.files && fdata.files.length) {
-      $fileCount.textContent = fdata.files.length + ' file(s)';
-      $fileCount.style.display = '';
-    } else {
-      $fileCount.style.display = 'none';
-    }
-  } catch (e) {
-    addMessage('agent', 'Failed to load thread: ' + e.message);
-  }
+  }catch(e){addMessage('agent','Failed to load: '+e.message);}
   loadThreads();
 }
+async function deleteThread(tid){if(!confirm('Delete this thread?'))return;try{await api(`/api/agent/threads/${tid}`,{method:'DELETE'});if(currentThreadId===tid)newChat();loadThreads();}catch(e){alert(e.message);}}
+function newChat(){currentThreadId=null;$chatTitle.textContent='New Chat';pendingFiles=[];renderFileChips();clearMessages();chatHistory=[];$emptyState.style.display='';loadThreads();}
 
-async function deleteThread(threadId) {
-  if (!confirm('Delete this thread?')) return;
-  try {
-    await api(`/api/agent/threads/${threadId}`, { method: 'DELETE' });
-    if (currentThreadId === threadId) newChat();
-    loadThreads();
-  } catch (e) { alert('Delete failed: ' + e.message); }
-}
-
-function newChat() {
-  currentThreadId = null;
-  $chatTitle.textContent = 'New Chat';
-  $fileCount.style.display = 'none';
-  pendingFiles = [];
-  renderFileChips();
-  clearMessages();
-  $emptyState.style.display = '';
-  loadThreads();
-}
-
-// ---------------------------------------------------------------------------
 // Messages
-// ---------------------------------------------------------------------------
-function clearMessages() {
-  $messages.innerHTML = '';
-  $emptyState.style.display = '';
-  $messages.appendChild($emptyState);
+function clearMessages(){$messages.innerHTML='';$emptyState.style.display='';$messages.appendChild($emptyState);}
+function addMessage(role,content){
+  $emptyState.style.display='none';
+  const msg=document.createElement('div');msg.className='msg '+role;msg.dataset.text=content;
+  const bubble=document.createElement('div');bubble.className='msg-bubble';bubble.innerHTML=renderMd(content);
+  msg.appendChild(bubble);$messages.appendChild(msg);scrollBottom();return bubble;
 }
-
-function addMessage(role, content) {
-  $emptyState.style.display = 'none';
-  const msg = document.createElement('div');
-  msg.className = 'msg ' + role;
-  const bubble = document.createElement('div');
-  bubble.className = 'msg-bubble';
-  bubble.innerHTML = renderMarkdown(content);
-  msg.appendChild(bubble);
-  $messages.appendChild(msg);
-  scrollToBottom();
-  return bubble;
+function addStreamingBubble(){
+  $emptyState.style.display='none';
+  const msg=document.createElement('div');msg.className='msg agent';
+  const bubble=document.createElement('div');bubble.className='msg-bubble';bubble.id='streaming-bubble';
+  msg.appendChild(bubble);$messages.appendChild(msg);scrollBottom();return bubble;
 }
-
-function addStreamingBubble() {
-  $emptyState.style.display = 'none';
-  const msg = document.createElement('div');
-  msg.className = 'msg agent';
-  const bubble = document.createElement('div');
-  bubble.className = 'msg-bubble';
-  bubble.id = 'streaming-bubble';
-  bubble.textContent = '';
-  msg.appendChild(bubble);
-  $messages.appendChild(msg);
-  scrollToBottom();
-  return bubble;
+function addToolCard(name,args,output,files,elapsed,done){
+  $emptyState.style.display='none';
+  const card=document.createElement('div');card.className='tool-card'+(done?' expanded':'');
+  let argsStr='';if(args&&Object.keys(args).length)argsStr=Object.entries(args).map(([k,v])=>`${k}: ${JSON.stringify(v)}`).join('\n');
+  let filesHtml='';if(files&&files.length)filesHtml='<div class="tc-files">'+files.map(f=>{const n=f.split('/').pop();return`<a href="${f}" download>&#128196; ${n}</a>`;}).join('')+'</div>';
+  const st=done?(elapsed!=null?`Done (${elapsed}s)`:'Done'):'Running...';
+  card.innerHTML=`<div class="tc-header" onclick="this.parentElement.classList.toggle('expanded')"><div class="tc-icon">T</div><span class="tc-name">${esc(name)}</span><span class="tc-status">${st}</span><span class="tc-chevron">&#9654;</span></div><div class="tc-body">${argsStr?`<div class="tc-args-label">Args</div><div class="tc-args">${esc(argsStr)}</div>`:''}${output?`<div class="tc-output-label">Output</div><div class="tc-output">${esc(output)}</div>`:''}${filesHtml}</div>${!done?'<div class="progress-bar"><div class="progress-fill"></div></div>':''}`;
+  $messages.appendChild(card);scrollBottom();return card;
 }
+function scrollBottom(){requestAnimationFrame(()=>{$messages.scrollTop=$messages.scrollHeight;});}
 
-function addToolCard(toolName, args, output, files, elapsed, done) {
-  $emptyState.style.display = 'none';
-  const card = document.createElement('div');
-  card.className = 'tool-card' + (done ? ' expanded' : '');
-  card.id = 'tool-card-' + Date.now();
-
-  let argsStr = '';
-  if (args && Object.keys(args).length) {
-    argsStr = Object.entries(args).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n');
-  }
-
-  let filesHtml = '';
-  if (files && files.length) {
-    filesHtml = '<div class="tc-files">' +
-      files.map(f => {
-        const name = f.split('/').pop();
-        return `<a href="${f}" download>&#128196; ${name}</a>`;
-      }).join('') + '</div>';
-  }
-
-  const statusText = done
-    ? (elapsed != null ? `Done (${elapsed}s)` : 'Done')
-    : 'Running...';
-
-  card.innerHTML = `
-    <div class="tc-header" onclick="this.parentElement.classList.toggle('expanded')">
-      <div class="tc-icon">T</div>
-      <span class="tc-name">${esc(toolName)}</span>
-      <span class="tc-status">${statusText}</span>
-      <span class="tc-chevron">&#9654;</span>
-    </div>
-    <div class="tc-body">
-      ${argsStr ? `<div class="tc-args-label">Args</div><div class="tc-args">${esc(argsStr)}</div>` : ''}
-      ${output ? `<div class="tc-output-label">Output</div><div class="tc-output">${esc(output)}</div>` : ''}
-      ${filesHtml}
-    </div>
-    ${!done ? '<div class="progress-bar"><div class="progress-fill"></div></div>' : ''}`;
-
-  $messages.appendChild(card);
-  scrollToBottom();
-  return card;
-}
-
-function scrollToBottom() {
-  requestAnimationFrame(() => { $messages.scrollTop = $messages.scrollHeight; });
-}
-
-// ---------------------------------------------------------------------------
 // File upload
-// ---------------------------------------------------------------------------
-function toggleUpload() {
-  $uploadZone.classList.toggle('active');
-}
+function toggleUpload(){$uploadZone.classList.toggle('active');}
+async function handleFileSelect(fl){for(const f of fl){try{const fd=new FormData();fd.append('file',f);const r=await fetch('/api/files',{method:'POST',body:fd,headers:hdrs()});if(!r.ok)throw new Error('Upload failed');const d=await r.json();pendingFiles.push({id:d.id,name:d.orig_name});renderFileChips();}catch(e){alert('Upload error: '+e.message);}}$uploadZone.classList.remove('active');}
+function renderFileChips(){$fileChips.innerHTML='';pendingFiles.forEach((f,i)=>{const c=document.createElement('span');c.className='file-chip';c.innerHTML=`&#128196; ${esc(f.name)} <button onclick="removeFile(${i})">&times;</button>`;$fileChips.appendChild(c);});}
+function removeFile(i){pendingFiles.splice(i,1);renderFileChips();}
+document.addEventListener('dragover',e=>{e.preventDefault();$uploadZone.classList.add('active','dragover');});
+document.addEventListener('dragleave',e=>{if(!e.relatedTarget||e.relatedTarget===document.documentElement)$uploadZone.classList.remove('dragover');});
+document.addEventListener('drop',e=>{e.preventDefault();$uploadZone.classList.remove('dragover');if(e.dataTransfer.files.length)handleFileSelect(e.dataTransfer.files);});
 
-async function handleFileSelect(fileList) {
-  for (const file of fileList) {
-    try {
-      const form = new FormData();
-      form.append('file', file);
-      const res = await fetch('/api/files', { method: 'POST', body: form, headers: headers() });
-      if (!res.ok) throw new Error('Upload failed');
-      const data = await res.json();
-      pendingFiles.push({ id: data.id, name: data.orig_name });
-      renderFileChips();
-    } catch (e) {
-      alert('Upload error: ' + e.message);
+// Send (SSE)
+async function sendMessage(){
+  const text=$input.value.trim();if(!text||isStreaming)return;
+  addMessage('user',text);chatHistory.push({role:'user',content:text});
+  $input.value='';autoResize($input);
+  const fileIds=pendingFiles.map(f=>f.id);pendingFiles=[];renderFileChips();
+  isStreaming=true;$('btnSend').disabled=true;
+  const body={message:text,file_ids:fileIds};if(currentThreadId)body.thread_id=currentThreadId;
+  try{
+    const res=await fetch('/api/agent/chat',{method:'POST',headers:hdrs({'Content-Type':'application/json'}),body:JSON.stringify(body)});
+    if(!res.ok){const err=await res.json().catch(()=>({}));addMessage('agent','Error: '+(err.detail||res.status));return;}
+    const reader=res.body.getReader(),dec=new TextDecoder();
+    let buf='',streamBubble=null,streamText='',activeCard=null;
+    while(true){
+      const{done,value}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();
+      let evt='';
+      for(const line of lines){
+        if(line.startsWith('event: '))evt=line.slice(7).trim();
+        else if(line.startsWith('data: ')&&evt){handleEvt(evt,JSON.parse(line.slice(6)));evt='';}
+      }
     }
-  }
-  $uploadZone.classList.remove('active');
+    function handleEvt(ev,d){
+      switch(ev){
+        case'thread':currentThreadId=d.thread_id;$chatTitle.textContent=d.thread_id.slice(0,12)+'...';break;
+        case'token':if(!streamBubble)streamBubble=addStreamingBubble();streamText+=d.content;streamBubble.innerHTML=renderMd(streamText);scrollBottom();break;
+        case'tool_start':if(streamBubble&&streamText){streamBubble.innerHTML=renderMd(streamText);streamBubble.parentElement.dataset.text=streamText;chatHistory.push({role:'agent',content:streamText});streamBubble=null;streamText='';}activeCard=addToolCard(d.tool,d.args,'',[]  ,null,false);break;
+        case'tool_progress':if(activeCard){const s=activeCard.querySelector('.tc-status');if(s)s.textContent=`Running... ${d.elapsed_seconds}s`;}break;
+        case'tool_end':if(activeCard){const p=activeCard.parentElement||$messages;const nc=document.createElement('div');nc.className='tool-card';const ae=activeCard.querySelector('.tc-args');const at=ae?ae.textContent:'';let fh='';if(d.files&&d.files.length)fh='<div class="tc-files">'+d.files.map(f=>`<a href="${f}" download>&#128196; ${f.split('/').pop()}</a>`).join('')+'</div>';const st=d.elapsed_seconds!=null?`Done (${d.elapsed_seconds}s)`:'Done';nc.innerHTML=`<div class="tc-header" onclick="this.parentElement.classList.toggle('expanded')"><div class="tc-icon">T</div><span class="tc-name">${esc(d.tool)}</span><span class="tc-status">${st}</span><span class="tc-chevron">&#9654;</span></div><div class="tc-body">${at?`<div class="tc-args-label">Args</div><div class="tc-args">${esc(at)}</div>`:''}${d.output?`<div class="tc-output-label">Output</div><div class="tc-output">${esc(d.output)}</div>`:''}${fh}</div>`;$messages.replaceChild(nc,activeCard);activeCard=null;chatHistory.push({role:'tool',name:d.tool,content:d.output});}break;
+        case'error':addMessage('agent','Error: '+d.message);break;
+        case'done':if(streamBubble&&streamText){streamBubble.innerHTML=renderMd(streamText);streamBubble.parentElement.dataset.text=streamText;chatHistory.push({role:'agent',content:streamText});}break;
+      }
+    }
+  }catch(e){addMessage('agent','Connection error: '+e.message);}
+  finally{isStreaming=false;$('btnSend').disabled=false;loadThreads();}
 }
 
-function renderFileChips() {
-  $fileChips.innerHTML = '';
-  pendingFiles.forEach((f, i) => {
-    const chip = document.createElement('span');
-    chip.className = 'file-chip';
-    chip.innerHTML = `&#128196; ${esc(f.name)} <button onclick="removeFile(${i})">&times;</button>`;
-    $fileChips.appendChild(chip);
+// Search / filter
+function filterMessages(q){
+  const msgs=$messages.querySelectorAll('.msg, .tool-card');
+  msgs.forEach(el=>{
+    if(!q){el.classList.remove('hidden');const b=el.querySelector('.msg-bubble');if(b&&el.dataset.text)b.innerHTML=renderMd(el.dataset.text);return;}
+    const t=(el.dataset.text||el.textContent||'').toLowerCase();
+    if(t.includes(q.toLowerCase())){el.classList.remove('hidden');const b=el.querySelector('.msg-bubble');if(b&&el.dataset.text)b.innerHTML=highlightMd(el.dataset.text,q);}
+    else el.classList.add('hidden');
   });
 }
+function highlightMd(text,q){let html=renderMd(text);const re=new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`,'gi');return html.replace(re,'<mark>$1</mark>');}
 
-function removeFile(idx) {
-  pendingFiles.splice(idx, 1);
-  renderFileChips();
+// Export
+function exportChat(fmt){
+  if(!chatHistory.length){alert('No messages to export');return;}
+  let content,filename,mime;
+  if(fmt==='json'){content=JSON.stringify({thread_id:currentThreadId,messages:chatHistory},null,2);filename='chat.json';mime='application/json';}
+  else{content=chatHistory.map(m=>{if(m.role==='user')return`**User:** ${m.content}`;if(m.role==='agent')return`**Agent:** ${m.content}`;return`**Tool (${m.name}):** ${m.content}`;}).join('\n\n---\n\n');filename='chat.md';mime='text/markdown';}
+  const blob=new Blob([content],{type:mime});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();URL.revokeObjectURL(a.href);
 }
 
-// Drag & drop
-document.addEventListener('dragover', e => { e.preventDefault(); $uploadZone.classList.add('active', 'dragover'); });
-document.addEventListener('dragleave', e => { if (!e.relatedTarget || e.relatedTarget === document.documentElement) $uploadZone.classList.remove('dragover'); });
-document.addEventListener('drop', e => {
-  e.preventDefault();
-  $uploadZone.classList.remove('dragover');
-  if (e.dataTransfer.files.length) handleFileSelect(e.dataTransfer.files);
-});
+// Helpers
+function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}
+function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px';}
+function toggleSidebar(){$('sidebar').classList.toggle('open');}
+function renderMd(t){if(!t)return'';let h=esc(t);h=h.replace(/```(\w*)\n([\s\S]*?)```/g,(_,l,c)=>`<pre><code>${c}</code></pre>`);h=h.replace(/`([^`]+)`/g,'<code>$1</code>');h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');h=h.replace(/\*(.+?)\*/g,'<em>$1</em>');h=h.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');h=h.replace(/\n\n+/g,'</p><p>');h=h.replace(/\n/g,'<br>');return'<p>'+h+'</p>';}
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 
-// ---------------------------------------------------------------------------
-// Send message (SSE)
-// ---------------------------------------------------------------------------
-async function sendMessage() {
-  const text = $input.value.trim();
-  if (!text || isStreaming) return;
-
-  addMessage('user', text);
-  $input.value = '';
-  autoResize($input);
-
-  const fileIds = pendingFiles.map(f => f.id);
-  pendingFiles = [];
-  renderFileChips();
-
-  isStreaming = true;
-  document.getElementById('btnSend').disabled = true;
-
-  const body = { message: text, file_ids: fileIds };
-  if (currentThreadId) body.thread_id = currentThreadId;
-
-  try {
-    const res = await fetch('/api/agent/chat', {
-      method: 'POST',
-      headers: headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      addMessage('agent', 'Error: ' + (err.detail || res.status));
-      return;
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let streamBubble = null;
-    let streamText = '';
-    let activeToolCard = null;
-    let activeToolName = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split('\n');
-      buffer = lines.pop(); // keep incomplete line
-
-      let eventType = '';
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          eventType = line.slice(7).trim();
-        } else if (line.startsWith('data: ') && eventType) {
-          const data = JSON.parse(line.slice(6));
-          handleSSE(eventType, data);
-          eventType = '';
-        }
-      }
-    }
-
-    function handleSSE(evt, data) {
-      switch (evt) {
-        case 'thread':
-          currentThreadId = data.thread_id;
-          $chatTitle.textContent = data.thread_id.slice(0, 12) + '...';
-          break;
-
-        case 'token':
-          if (!streamBubble) streamBubble = addStreamingBubble();
-          streamText += data.content;
-          streamBubble.innerHTML = renderMarkdown(streamText);
-          scrollToBottom();
-          break;
-
-        case 'tool_start':
-          // Finalize any streaming text
-          if (streamBubble && streamText) {
-            streamBubble.innerHTML = renderMarkdown(streamText);
-            streamBubble = null;
-            streamText = '';
-          }
-          activeToolName = data.tool;
-          activeToolCard = addToolCard(data.tool, data.args, '', [], null, false);
-          break;
-
-        case 'tool_progress':
-          if (activeToolCard) {
-            const status = activeToolCard.querySelector('.tc-status');
-            if (status) status.textContent = `Running... ${data.elapsed_seconds}s`;
-          }
-          break;
-
-        case 'tool_end':
-          if (activeToolCard) {
-            // Replace with completed card
-            const parent = activeToolCard.parentElement;
-            const newCard = document.createElement('div');
-            newCard.className = 'tool-card';
-            const argsEl = activeToolCard.querySelector('.tc-args');
-            const argsText = argsEl ? argsEl.textContent : '';
-            let filesHtml = '';
-            if (data.files && data.files.length) {
-              filesHtml = '<div class="tc-files">' +
-                data.files.map(f => {
-                  const name = f.split('/').pop();
-                  return `<a href="${f}" download>&#128196; ${name}</a>`;
-                }).join('') + '</div>';
-            }
-            const statusText = data.elapsed_seconds != null ? `Done (${data.elapsed_seconds}s)` : 'Done';
-            newCard.innerHTML = `
-              <div class="tc-header" onclick="this.parentElement.classList.toggle('expanded')">
-                <div class="tc-icon">T</div>
-                <span class="tc-name">${esc(data.tool)}</span>
-                <span class="tc-status">${statusText}</span>
-                <span class="tc-chevron">&#9654;</span>
-              </div>
-              <div class="tc-body">
-                ${argsText ? `<div class="tc-args-label">Args</div><div class="tc-args">${esc(argsText)}</div>` : ''}
-                ${data.output ? `<div class="tc-output-label">Output</div><div class="tc-output">${esc(data.output)}</div>` : ''}
-                ${filesHtml}
-              </div>`;
-            parent.replaceChild(newCard, activeToolCard);
-            activeToolCard = null;
-          }
-          break;
-
-        case 'error':
-          addMessage('agent', 'Error: ' + data.message);
-          break;
-
-        case 'done':
-          // Finalize streaming text
-          if (streamBubble && streamText) {
-            streamBubble.innerHTML = renderMarkdown(streamText);
-          }
-          break;
-      }
-    }
-  } catch (e) {
-    addMessage('agent', 'Connection error: ' + e.message);
-  } finally {
-    isStreaming = false;
-    document.getElementById('btnSend').disabled = false;
-    loadThreads();
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Input handling
-// ---------------------------------------------------------------------------
-function handleKey(e) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
-  }
-}
-
-function autoResize(el) {
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-}
-
-function toggleSidebar() {
-  document.getElementById('sidebar').classList.toggle('open');
-}
-
-// ---------------------------------------------------------------------------
-// Markdown (simple)
-// ---------------------------------------------------------------------------
-function renderMarkdown(text) {
-  if (!text) return '';
-  let html = esc(text);
-  // Code blocks
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
-    `<pre><code>${code}</code></pre>`);
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // Bold
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // Italic
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  // Links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-  // Line breaks → paragraphs
-  html = html.replace(/\n\n+/g, '</p><p>');
-  html = html.replace(/\n/g, '<br>');
-  html = '<p>' + html + '</p>';
-  return html;
-}
-
-function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-// ---------------------------------------------------------------------------
 // Init
-// ---------------------------------------------------------------------------
-loadThreads();
-$input.focus();
+loadThreads();$input.focus();
 </script>
 </body>
 </html>

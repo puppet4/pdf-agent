@@ -1,4 +1,4 @@
-"""File service - handles file upload and retrieval."""
+"""File service - handles file upload and retrieval with validation."""
 from __future__ import annotations
 
 import uuid
@@ -13,6 +13,34 @@ from pdf_agent.config import settings
 from pdf_agent.db.models import FileRecord
 from pdf_agent.storage import storage
 
+# Magic byte signatures for file type validation
+_MAGIC_SIGNATURES: dict[str, list[bytes]] = {
+    "application/pdf": [b"%PDF"],
+    "image/png": [b"\x89PNG\r\n\x1a\n"],
+    "image/jpeg": [b"\xff\xd8\xff"],
+    "image/gif": [b"GIF87a", b"GIF89a"],
+    "image/webp": [b"RIFF"],  # RIFF....WEBP
+    "image/tiff": [b"II\x2a\x00", b"MM\x00\x2a"],
+    "image/bmp": [b"BM"],
+    # Office formats (ZIP-based: docx, xlsx, pptx)
+    "application/zip": [b"PK\x03\x04"],
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [b"PK\x03\x04"],
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [b"PK\x03\x04"],
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": [b"PK\x03\x04"],
+    # Legacy Office (OLE2)
+    "application/msword": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"],
+    "application/vnd.ms-excel": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"],
+    "application/vnd.ms-powerpoint": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"],
+}
+
+
+def _validate_magic_bytes(content: bytes, declared_mime: str) -> bool:
+    """Check if file content matches the declared MIME type's magic bytes."""
+    sigs = _MAGIC_SIGNATURES.get(declared_mime)
+    if not sigs:
+        return True  # unknown type → allow (no signature to check)
+    return any(content[:len(sig)] == sig for sig in sigs)
+
 
 class FileService:
     def __init__(self, session: AsyncSession) -> None:
@@ -23,6 +51,13 @@ class FileService:
         max_bytes = settings.max_upload_size_mb * 1024 * 1024
         if len(content) > max_bytes:
             raise PDFAgentError(ErrorCode.FILE_TOO_LARGE, f"File exceeds {settings.max_upload_size_mb}MB limit")
+
+        # Validate magic bytes
+        if not _validate_magic_bytes(content, content_type):
+            raise PDFAgentError(
+                ErrorCode.UNSUPPORTED_FORMAT,
+                f"File content does not match declared type '{content_type}'. Possible file corruption or extension mismatch.",
+            )
 
         file_id = uuid.uuid4()
         sha256 = storage.compute_sha256(content)
