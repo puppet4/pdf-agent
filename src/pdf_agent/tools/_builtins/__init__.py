@@ -26,36 +26,26 @@ def get_builtin_tools() -> list[BaseTool]:
     from pdf_agent.tools._builtins.ocr import OcrTool
     from pdf_agent.tools._builtins.pdf_to_images import PdfToImagesTool
     from pdf_agent.tools._builtins.pdf_to_word import PdfToWordTool
+    from pdf_agent.tools._builtins.pdf_to_office import PdfToExcelTool, PdfToPptTool
     from pdf_agent.tools._builtins.pdf_to_text import PdfToTextTool
     from pdf_agent.tools._builtins.crop import CropTool
     from pdf_agent.tools._builtins.resize import ResizeTool
     from pdf_agent.tools._builtins.flatten import FlattenTool
     from pdf_agent.tools._builtins.remove_blank_pages import RemoveBlankPagesTool
+    from pdf_agent.tools._builtins.nup import NUpTool
+    from pdf_agent.tools._builtins.qr_code import QrCodeTool
+    from pdf_agent.tools._builtins.compare import CompareTool
 
     return [
-        MergeTool(),
-        SplitTool(),
-        RotateTool(),
-        MetadataInfoTool(),
-        SetMetadataTool(),
-        ExtractTool(),
-        DeleteTool(),
-        ReorderTool(),
-        EncryptTool(),
-        DecryptTool(),
-        WatermarkTextTool(),
-        WatermarkImageTool(),
-        StampTool(),
-        AddPageNumbersTool(),
-        ImagesToPdfTool(),
-        CompressTool(),
-        RepairTool(),
-        OcrTool(),
-        PdfToImagesTool(),
-        PdfToWordTool(),
+        MergeTool(), SplitTool(), RotateTool(),
+        MetadataInfoTool(), SetMetadataTool(),
+        ExtractTool(), DeleteTool(), ReorderTool(),
+        EncryptTool(), DecryptTool(),
+        WatermarkTextTool(), WatermarkImageTool(), StampTool(),
+        AddPageNumbersTool(), ImagesToPdfTool(),
+        CompressTool(), RepairTool(), OcrTool(),
+        PdfToImagesTool(), PdfToWordTool(), PdfToExcelTool(), PdfToPptTool(),
         PdfToTextTool(),
-        CropTool(),
-        ResizeTool(),
-        FlattenTool(),
-        RemoveBlankPagesTool(),
+        CropTool(), ResizeTool(), FlattenTool(),
+        RemoveBlankPagesTool(), NUpTool(), QrCodeTool(), CompareTool(),
     ]

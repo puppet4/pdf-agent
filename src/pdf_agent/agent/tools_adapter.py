@@ -13,6 +13,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
 from pdf_agent.agent.state import AgentState
+from pdf_agent.config import settings
 from pdf_agent.schemas.tool import ParamSpec, ToolManifest
 from pdf_agent.tools.base import BaseTool
 from pdf_agent.tools.registry import ToolRegistry
@@ -161,15 +162,18 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
                 except queue.Full:
                     pass
 
-        # --- Execute tool (async_hint=True → offload to thread pool) ---
+        # --- Execute tool (async_hint=True → offload to thread pool with timeout) ---
         try:
             if manifest.async_hint:
-                result = await asyncio.to_thread(
-                    tool.run,
-                    inputs=input_paths,
-                    params=params,
-                    workdir=step_dir,
-                    reporter=reporter,
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        tool.run,
+                        inputs=input_paths,
+                        params=params,
+                        workdir=step_dir,
+                        reporter=reporter,
+                    ),
+                    timeout=settings.external_cmd_timeout_sec,
                 )
             else:
                 result = tool.run(
@@ -178,6 +182,8 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
                     workdir=step_dir,
                     reporter=reporter,
                 )
+        except asyncio.TimeoutError:
+            return f"Error: {manifest.name} timed out after {settings.external_cmd_timeout_sec}s"
         except Exception as e:
             logger.exception("Tool %s failed", manifest.name)
             return f"Error executing {manifest.name}: {e}"

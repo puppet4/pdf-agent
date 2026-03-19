@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Reserve tokens for system prompt + response; use the rest for history
 MAX_HISTORY_TOKENS = 100_000
+SUMMARY_THRESHOLD = 80_000  # start summarizing when approaching limit
 _encoder: tiktoken.Encoding | None = None
 
 
@@ -71,15 +72,38 @@ def _make_agent_node(model_with_tools: ChatOpenAI):
             current_files=state.get("current_files", []),
         )
 
-        # Trim messages to stay within context window (token-level)
-        messages = trim_messages(
-            state["messages"],
-            max_tokens=MAX_HISTORY_TOKENS,
-            token_counter=_tiktoken_counter,
-            strategy="last",
-            start_on="human",
-            allow_partial=False,
-        )
+        messages = state["messages"]
+        token_count = _tiktoken_counter(messages)
+
+        # If approaching context limit, trim to last N messages
+        if token_count > MAX_HISTORY_TOKENS:
+            messages = trim_messages(
+                messages,
+                max_tokens=MAX_HISTORY_TOKENS,
+                token_counter=_tiktoken_counter,
+                strategy="last",
+                start_on="human",
+                allow_partial=False,
+            )
+        elif token_count > SUMMARY_THRESHOLD:
+            # Summarize older messages to save context
+            old_msgs = messages[:-4] if len(messages) > 4 else []
+            recent_msgs = messages[-4:] if len(messages) > 4 else messages
+            if old_msgs:
+                history_text = "\n".join(
+                    f"{m.type}: {m.content[:200]}" for m in old_msgs if hasattr(m, "content") and isinstance(m.content, str)
+                )
+                try:
+                    from langchain_core.messages import HumanMessage
+                    summary_response = await model_with_tools.ainvoke([
+                        HumanMessage(content=f"Summarize this conversation history in 2-3 sentences:\n{history_text}")
+                    ])
+                    from langchain_core.messages import AIMessage as _AI
+                    summary_msg = _AI(content=f"[Earlier conversation summary: {summary_response.content}]")
+                    messages = [summary_msg] + recent_msgs
+                except Exception:
+                    messages = recent_msgs
+
         messages = [SystemMessage(content=sys_prompt)] + messages
 
         response = await model_with_tools.ainvoke(messages)

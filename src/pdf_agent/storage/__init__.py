@@ -67,5 +67,26 @@ class LocalStorage:
                 logger.warning("Failed to clean up thread workdir: %s", entry.name)
         return removed
 
+    def cleanup_expired_uploads(self) -> int:
+        """Remove uploaded files older than thread_ttl_hours. Returns count removed."""
+        upload_dir = settings.upload_dir
+        if not upload_dir.exists():
+            return 0
+
+        cutoff = time.time() - settings.thread_ttl_hours * 3600
+        removed = 0
+        for entry in upload_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            try:
+                mtime = entry.stat().st_mtime
+                if mtime < cutoff:
+                    shutil.rmtree(entry)
+                    removed += 1
+                    logger.info("Cleaned up expired upload: %s", entry.name)
+            except OSError:
+                logger.warning("Failed to clean up upload: %s", entry.name)
+        return removed
+
 
 storage = LocalStorage()
