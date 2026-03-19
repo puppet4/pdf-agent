@@ -341,3 +341,80 @@ async def delete_thread(thread_id: str):
 
     shutil.rmtree(thread_dir)
     return {"deleted": True, "thread_id": thread_id}
+
+
+# ---------------------------------------------------------------------------
+# Batch operations endpoint
+# ---------------------------------------------------------------------------
+
+class BatchRequest(BaseModel):
+    """Run the same tool on multiple files in parallel, each in its own thread."""
+    tool_name: str
+    file_ids: list[str]
+    tool_params: dict = {}
+
+
+@router.post("/batch")
+async def batch_run(req: BatchRequest, request: Request):
+    """Run a tool on multiple files concurrently. Returns SSE stream."""
+    graph = request.app.state.graph
+    if graph is None:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+    if not req.file_ids:
+        raise HTTPException(status_code=422, detail="file_ids must not be empty")
+
+    # Build one message per file asking the agent to apply the tool
+    params_str = ", ".join(f"{k}={v}" for k, v in req.tool_params.items())
+    param_clause = f" with {params_str}" if params_str else ""
+
+    async def event_stream():
+        tasks = []
+        for fid in req.file_ids:
+            thread_id = str(uuid.uuid4())
+            msg = f"Apply {req.tool_name}{param_clause} to this file."
+            tasks.append((fid, thread_id, msg))
+
+        yield _sse_event("batch_start", {"count": len(tasks), "tool": req.tool_name})
+
+        async def run_one(fid: str, thread_id: str, msg: str):
+            uploaded = await _resolve_uploaded_files([fid])
+            if not uploaded:
+                return thread_id, fid, None, "File not found"
+            thread_workdir = settings.threads_dir / thread_id
+            thread_workdir.mkdir(parents=True, exist_ok=True)
+            input_state: dict = {
+                "messages": [{"role": "user", "content": msg}],
+                "thread_workdir": str(thread_workdir),
+                "files": uploaded,
+                "current_files": [f["path"] for f in uploaded],
+            }
+            config = {"configurable": {"thread_id": thread_id}}
+            output = ""
+            files_out: list[str] = []
+            try:
+                async for event in graph.astream_events(input_state, config=config, version="v2"):
+                    if event["event"] == "on_tool_end":
+                        out = event["data"].get("output", "")
+                        output = str(out)[:300]
+                        files_out = _paths_to_download_urls(thread_id, _extract_output_files(out))
+            except Exception as e:
+                return thread_id, fid, None, str(e)
+            return thread_id, fid, files_out, output
+
+        results = await asyncio.gather(*[run_one(fid, tid, msg) for fid, tid, msg in tasks])
+
+        for thread_id, fid, files_out, output in results:
+            yield _sse_event("batch_result", {
+                "file_id": fid,
+                "thread_id": thread_id,
+                "files": files_out or [],
+                "output": output,
+            })
+
+        yield _sse_event("done", {})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

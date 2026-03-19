@@ -40,17 +40,18 @@ logger = logging.getLogger(__name__)
 
 
 async def _cleanup_loop():
-    """Periodically clean up expired thread workdirs."""
+    """Periodically clean up expired thread workdirs and uploaded files."""
     from pdf_agent.storage import storage
 
     while True:
         await asyncio.sleep(3600)  # every hour
         try:
-            removed = storage.cleanup_expired_threads()
-            if removed:
-                logger.info("Cleaned up %d expired thread(s)", removed)
+            removed_threads = storage.cleanup_expired_threads()
+            removed_uploads = storage.cleanup_expired_uploads()
+            if removed_threads or removed_uploads:
+                logger.info("Cleaned up %d thread(s), %d upload(s)", removed_threads, removed_uploads)
         except Exception:
-            logger.exception("Thread cleanup failed")
+            logger.exception("Cleanup failed")
 
 
 def _setup_langsmith():
