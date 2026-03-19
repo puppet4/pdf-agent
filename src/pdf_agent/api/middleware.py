@@ -1,7 +1,9 @@
-"""API middleware — authentication and rate limiting."""
+"""API middleware — authentication, rate limiting, request tracing."""
 from __future__ import annotations
 
+import logging
 import time
+import uuid
 from collections import defaultdict
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -10,8 +12,21 @@ from starlette.responses import JSONResponse
 
 from pdf_agent.config import settings
 
+logger = logging.getLogger(__name__)
+
 # Paths that skip authentication
-_PUBLIC_PATHS = {"/healthz", "/docs", "/redoc", "/openapi.json"}
+_PUBLIC_PATHS = {"/healthz", "/docs", "/redoc", "/openapi.json", "/metrics"}
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Attach a unique request ID to every request for log tracing."""
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
@@ -22,7 +37,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
-        if path in _PUBLIC_PATHS or path.startswith("/static"):
+        if path in _PUBLIC_PATHS or path.startswith("/static") or path.startswith("/api/auth"):
             return await call_next(request)
 
         provided = request.headers.get("X-API-Key") or request.query_params.get("api_key")
@@ -30,6 +45,47 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key"},
+            )
+
+        return await call_next(request)
+
+
+class JWTMiddleware(BaseHTTPMiddleware):
+    """Verify JWT Bearer token and set request.state.user when jwt_secret is configured."""
+
+    async def dispatch(self, request: Request, call_next):
+        if not settings.jwt_secret:
+            request.state.user = None
+            return await call_next(request)
+
+        path = request.url.path
+        if path in _PUBLIC_PATHS or path.startswith("/static") or path.startswith("/api/auth"):
+            request.state.user = None
+            return await call_next(request)
+
+        # API key takes precedence — if valid, skip JWT
+        if settings.api_key:
+            provided_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+            if provided_key == settings.api_key:
+                request.state.user = None
+                return await call_next(request)
+
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Missing Bearer token"},
+            )
+
+        token = auth_header[7:]
+        try:
+            from pdf_agent.api.auth import verify_token
+            payload = verify_token(token)
+            request.state.user = {"id": payload["sub"], "email": payload.get("email", "")}
+        except Exception:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or expired token"},
             )
 
         return await call_next(request)

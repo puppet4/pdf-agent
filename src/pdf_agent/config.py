@@ -35,6 +35,12 @@ class Settings(BaseSettings):
 
     # --- Auth ---
     api_key: str = ""  # if set, require X-API-Key header for all API calls
+    jwt_secret: str = ""  # if set, enable JWT user authentication
+    jwt_algorithm: str = "HS256"
+    jwt_expire_hours: int = 24
+
+    # --- CORS ---
+    cors_origins: str = "*"  # comma-separated allowed origins
 
     # --- LangSmith ---
     langsmith_api_key: str = ""
@@ -46,6 +52,13 @@ class Settings(BaseSettings):
     # --- Cleanup ---
     thread_ttl_hours: int = 72  # delete thread workdirs older than this
 
+    # --- Observability ---
+    sentry_dsn: str = ""  # if set, enable Sentry error tracking
+    metrics_enabled: bool = True
+
+    # --- i18n ---
+    default_locale: str = "en"  # "en" or "zh"
+
     @property
     def upload_dir(self) -> Path:
         return self.data_dir / "uploads"
@@ -53,6 +66,10 @@ class Settings(BaseSettings):
     @property
     def threads_dir(self) -> Path:
         return self.data_dir / "threads"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     def ensure_dirs(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)

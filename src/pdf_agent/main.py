@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import logging.config
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,10 +19,22 @@ from pdf_agent.core import PDFAgentError
 from pdf_agent.api.router import api_router
 from pdf_agent.tools.registry import load_builtin_tools, registry
 
-logging.basicConfig(
-    level=logging.DEBUG if settings.debug else logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
+
+def _configure_logging():
+    """Configure JSON structured logging with request_id support."""
+    log_format = (
+        '{"time": "%(asctime)s", "level": "%(levelname)s", '
+        '"name": "%(name)s", "message": %(message)r}'
+        if not settings.debug
+        else "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    )
+    logging.basicConfig(
+        level=logging.DEBUG if settings.debug else logging.INFO,
+        format=log_format,
+    )
+
+
+_configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +62,22 @@ def _setup_langsmith():
     logger.info("LangSmith tracing enabled (project=%s)", settings.langsmith_project)
 
 
+def _setup_sentry():
+    """Initialize Sentry error tracking if DSN is configured."""
+    if not settings.sentry_dsn:
+        return
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            traces_sample_rate=0.1,
+            environment="production" if not settings.debug else "development",
+        )
+        logger.info("Sentry error tracking enabled")
+    except ImportError:
+        logger.warning("sentry-sdk not installed — Sentry disabled. Run: pip install sentry-sdk")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -61,8 +90,8 @@ async def lifespan(app: FastAPI):
             "Please set it via environment variable or .env file."
         )
 
-    # Setup LangSmith before loading graph
     _setup_langsmith()
+    _setup_sentry()
 
     load_builtin_tools()
     logger.info("Loaded %d tools", len(registry))
@@ -108,29 +137,34 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Middleware (order matters: first added = outermost)
-from pdf_agent.api.middleware import ApiKeyMiddleware, RateLimitMiddleware
+# Middleware (outermost first)
+from pdf_agent.api.middleware import ApiKeyMiddleware, JWTMiddleware, RateLimitMiddleware, RequestIdMiddleware
+
+if settings.metrics_enabled:
+    from pdf_agent.api.metrics import MetricsMiddleware
+    app.add_middleware(MetricsMiddleware)
 
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(JWTMiddleware)
 app.add_middleware(ApiKeyMiddleware)
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include all API routes
+# Routes
 app.include_router(api_router)
 
-# Serve frontend static files
+# Static frontend
 _static_dir = Path(__file__).parent / "static"
 if _static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(_static_dir), html=True), name="static")
 
 
-# Global error handler for PDFAgentError
 @app.exception_handler(PDFAgentError)
 async def pdf_agent_error_handler(request: Request, exc: PDFAgentError) -> JSONResponse:
     return JSONResponse(
