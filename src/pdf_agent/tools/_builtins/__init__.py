@@ -39,17 +39,21 @@ def get_builtin_tools() -> list[BaseTool]:
     from pdf_agent.tools._builtins.form_fill import FormFillTool
     from pdf_agent.tools._builtins.signature_info import SignatureInfoTool
     from pdf_agent.tools._builtins.deskew import DeskewTool
+    from pdf_agent.tools._builtins.pdf_to_markdown import PdfToMarkdownTool
+    from pdf_agent.tools._builtins.header_footer import HeaderFooterTool
+    from pdf_agent.tools._builtins.remove_metadata import RemoveMetadataTool
+    from pdf_agent.tools._builtins.pdf_to_pdfa import PdfATool
 
     return [
         MergeTool(), SplitTool(), RotateTool(),
-        MetadataInfoTool(), SetMetadataTool(),
+        MetadataInfoTool(), SetMetadataTool(), RemoveMetadataTool(),
         ExtractTool(), DeleteTool(), ReorderTool(),
         EncryptTool(), DecryptTool(),
         WatermarkTextTool(), WatermarkImageTool(), StampTool(),
-        AddPageNumbersTool(), ImagesToPdfTool(),
+        HeaderFooterTool(), AddPageNumbersTool(), ImagesToPdfTool(),
         CompressTool(), RepairTool(), OcrTool(),
         PdfToImagesTool(), PdfToWordTool(), PdfToExcelTool(), PdfToPptTool(),
-        PdfToTextTool(), PdfToHtmlTool(),
+        PdfToTextTool(), PdfToHtmlTool(), PdfToMarkdownTool(), PdfATool(),
         CropTool(), ResizeTool(), FlattenTool(),
         RemoveBlankPagesTool(), NUpTool(), QrCodeTool(), CompareTool(),
         FormFillTool(), SignatureInfoTool(), DeskewTool(),
