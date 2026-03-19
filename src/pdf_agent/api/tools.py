@@ -45,6 +45,7 @@ class ToolRunRequest(BaseModel):
 
     - **file_ids**: IDs of previously-uploaded files (from POST /api/files)
     - **params**: Tool-specific parameters (see GET /api/tools/{name} for the param spec)
+    - **webhook_url**: Optional URL to POST results when tool completes
 
     Example for `rotate`:
     ```json
@@ -53,6 +54,7 @@ class ToolRunRequest(BaseModel):
     """
     file_ids: list[str]
     params: dict[str, Any] = {}
+    webhook_url: str | None = None
 
 
 class ToolRunResponse(BaseModel):
@@ -151,13 +153,26 @@ async def run_tool(tool_name: str, req: ToolRunRequest):
             "size_bytes": f.stat().st_size,
         })
 
-    return ToolRunResponse(
+    response = ToolRunResponse(
         tool=tool_name,
         status="success",
         log=tool_result.log,
         meta=tool_result.meta,
         output_files=output_files,
     )
+
+    # Fire webhook if configured
+    if req.webhook_url:
+        from pdf_agent.webhook import schedule_webhook
+        schedule_webhook(req.webhook_url, {
+            "event": "tool_complete",
+            "tool": tool_name,
+            "status": "success",
+            "output_files": output_files,
+            "log": tool_result.log,
+        })
+
+    return response
 
 
 @router.get(

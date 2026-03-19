@@ -167,7 +167,14 @@ if _static_dir.is_dir():
 
 @app.exception_handler(PDFAgentError)
 async def pdf_agent_error_handler(request: Request, exc: PDFAgentError) -> JSONResponse:
+    from pdf_agent.core import localized_error
+    # Use Accept-Language header to pick locale
+    accept_lang = request.headers.get("Accept-Language", "")
+    locale = "zh" if "zh" in accept_lang else settings.default_locale
     return JSONResponse(
         status_code=400,
-        content={"error_code": exc.code, "message": exc.message},
+        content={
+            "error_code": exc.code,
+            "message": localized_error(exc.code, exc.message, locale),
+        },
     )
