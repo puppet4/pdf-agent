@@ -1,13 +1,20 @@
-"""Workflow templates — predefined multi-tool chains."""
+"""Workflow templates — built-in presets + user-defined CRUD."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+import json
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+from pdf_agent.config import settings
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
 # ---------------------------------------------------------------------------
-# Template definitions
+# Models
 # ---------------------------------------------------------------------------
 
 class WorkflowParam(BaseModel):
@@ -24,9 +31,22 @@ class WorkflowTemplate(BaseModel):
     description: str
     prompt_template: str
     params: list[WorkflowParam] = []
+    builtin: bool = True
+    created_at: str | None = None
 
 
-TEMPLATES: list[WorkflowTemplate] = [
+class CreateWorkflowRequest(BaseModel):
+    name: str
+    description: str = ""
+    prompt_template: str
+    params: list[WorkflowParam] = []
+
+
+# ---------------------------------------------------------------------------
+# Built-in templates
+# ---------------------------------------------------------------------------
+
+BUILTIN_TEMPLATES: list[WorkflowTemplate] = [
     WorkflowTemplate(
         id="scan-to-searchable",
         name="Scan → Searchable PDF",
@@ -47,7 +67,7 @@ TEMPLATES: list[WorkflowTemplate] = [
         id="split-and-number",
         name="Split & Add Page Numbers",
         description="Extract a page range and add page numbers to the result.",
-        prompt_template='Extract pages {page_range} from the PDF, then add page numbers to the result.',
+        prompt_template="Extract pages {page_range} from the PDF, then add page numbers to the result.",
         params=[
             WorkflowParam(name="page_range", label="Page range", default="all"),
         ],
@@ -67,9 +87,61 @@ TEMPLATES: list[WorkflowTemplate] = [
             WorkflowParam(name="watermark_text", label="Watermark text", default="PROCESSED"),
         ],
     ),
+    WorkflowTemplate(
+        id="pdf-to-word-compress",
+        name="PDF → Word",
+        description="Convert PDF to editable Word document.",
+        prompt_template="Convert this PDF to a Word document.",
+    ),
+    WorkflowTemplate(
+        id="compare-versions",
+        name="Compare Two PDFs",
+        description="Highlight differences between two PDF versions.",
+        prompt_template="Compare these two PDF files and highlight the differences. Use highlight color {color}.",
+        params=[
+            WorkflowParam(name="color", label="Highlight color", default="red"),
+        ],
+    ),
 ]
 
-_TEMPLATES_BY_ID = {t.id: t for t in TEMPLATES}
+_BUILTIN_BY_ID = {t.id: t for t in BUILTIN_TEMPLATES}
+
+
+# ---------------------------------------------------------------------------
+# User-defined workflow storage (filesystem JSON)
+# ---------------------------------------------------------------------------
+
+def _workflows_file() -> Path:
+    path = settings.data_dir / "workflows.json"
+    return path
+
+
+def _load_user_workflows() -> dict[str, WorkflowTemplate]:
+    p = _workflows_file()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text())
+        return {k: WorkflowTemplate(**v) for k, v in data.items()}
+    except (json.JSONDecodeError, KeyError, ValueError):
+        return {}
+
+
+def _save_user_workflows(workflows: dict[str, WorkflowTemplate]) -> None:
+    p = _workflows_file()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({k: v.model_dump() for k, v in workflows.items()}, indent=2, ensure_ascii=False))
+
+
+def _all_workflows() -> list[WorkflowTemplate]:
+    user = _load_user_workflows()
+    return BUILTIN_TEMPLATES + list(user.values())
+
+
+def _get_workflow(workflow_id: str) -> WorkflowTemplate | None:
+    if workflow_id in _BUILTIN_BY_ID:
+        return _BUILTIN_BY_ID[workflow_id]
+    return _load_user_workflows().get(workflow_id)
 
 
 # ---------------------------------------------------------------------------
@@ -83,40 +155,103 @@ class ExecuteRequest(BaseModel):
     params: dict[str, str] = {}
 
 
-@router.get("")
+@router.get(
+    "",
+    summary="List all workflow templates",
+    description="Returns built-in workflow presets and any user-defined custom workflows.",
+)
 async def list_workflows():
-    """List all available workflow templates."""
-    return {"workflows": [t.model_dump() for t in TEMPLATES]}
+    return {"workflows": [t.model_dump() for t in _all_workflows()]}
 
 
-@router.get("/{workflow_id}")
+@router.post(
+    "",
+    summary="Create a custom workflow",
+    description="Save a reusable workflow template with a prompt and optional parameters.",
+    status_code=201,
+)
+async def create_workflow(req: CreateWorkflowRequest):
+    user_workflows = _load_user_workflows()
+    wf_id = str(uuid.uuid4())[:8]
+    wf = WorkflowTemplate(
+        id=wf_id,
+        name=req.name,
+        description=req.description,
+        prompt_template=req.prompt_template,
+        params=req.params,
+        builtin=False,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    user_workflows[wf_id] = wf
+    _save_user_workflows(user_workflows)
+    return wf.model_dump()
+
+
+@router.get(
+    "/{workflow_id}",
+    summary="Get a workflow template",
+)
 async def get_workflow(workflow_id: str):
-    """Get a single workflow template."""
-    tmpl = _TEMPLATES_BY_ID.get(workflow_id)
+    tmpl = _get_workflow(workflow_id)
     if not tmpl:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Workflow not found")
     return tmpl.model_dump()
 
 
-@router.post("/{workflow_id}/render")
-async def render_workflow(workflow_id: str, req: ExecuteRequest):
-    """Render the workflow prompt with provided parameters.
-
-    Returns the prompt string to send to /api/agent/chat along with file_ids.
-    The frontend can then POST it to the chat endpoint.
-    """
-    tmpl = _TEMPLATES_BY_ID.get(workflow_id)
-    if not tmpl:
-        from fastapi import HTTPException
+@router.put(
+    "/{workflow_id}",
+    summary="Update a custom workflow",
+    description="Only user-defined workflows can be updated.",
+)
+async def update_workflow(workflow_id: str, req: CreateWorkflowRequest):
+    if workflow_id in _BUILTIN_BY_ID:
+        raise HTTPException(status_code=403, detail="Cannot modify built-in workflows")
+    user_workflows = _load_user_workflows()
+    if workflow_id not in user_workflows:
         raise HTTPException(status_code=404, detail="Workflow not found")
+    existing = user_workflows[workflow_id]
+    updated = WorkflowTemplate(
+        id=workflow_id,
+        name=req.name,
+        description=req.description,
+        prompt_template=req.prompt_template,
+        params=req.params,
+        builtin=False,
+        created_at=existing.created_at,
+    )
+    user_workflows[workflow_id] = updated
+    _save_user_workflows(user_workflows)
+    return updated.model_dump()
 
+
+@router.delete(
+    "/{workflow_id}",
+    summary="Delete a custom workflow",
+)
+async def delete_workflow(workflow_id: str):
+    if workflow_id in _BUILTIN_BY_ID:
+        raise HTTPException(status_code=403, detail="Cannot delete built-in workflows")
+    user_workflows = _load_user_workflows()
+    if workflow_id not in user_workflows:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    del user_workflows[workflow_id]
+    _save_user_workflows(user_workflows)
+    return {"deleted": True, "id": workflow_id}
+
+
+@router.post(
+    "/{workflow_id}/render",
+    summary="Render workflow prompt",
+    description="Substitute parameters into the workflow prompt template. Returns the prompt to send to /api/agent/chat.",
+)
+async def render_workflow(workflow_id: str, req: ExecuteRequest):
+    tmpl = _get_workflow(workflow_id)
+    if not tmpl:
+        raise HTTPException(status_code=404, detail="Workflow not found")
     try:
         prompt = tmpl.prompt_template.format(**req.params)
     except KeyError as exc:
-        from fastapi import HTTPException
         raise HTTPException(status_code=422, detail=f"Missing parameter: {exc}")
-
     return {
         "workflow_id": workflow_id,
         "prompt": prompt,

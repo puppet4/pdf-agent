@@ -60,11 +60,31 @@ jobs:
           PDF_AGENT_OPENAI_API_KEY: sk-placeholder
         run: python -m pytest tests/ -v --tb=short
 
+      - name: Smoke test (API endpoints)
+        env:
+          PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent
+          PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@localhost:5432/pdf_agent
+          PDF_AGENT_OPENAI_API_KEY: sk-placeholder
+        run: |
+          uvicorn pdf_agent.main:app --host 127.0.0.1 --port 8765 &
+          SERVER_PID=$!
+          sleep 5
+          curl -sf http://127.0.0.1:8765/healthz | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['database']=='ok', f'DB check failed: {d}'"
+          curl -sf http://127.0.0.1:8765/api/tools | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d['tools'])>=30, f'Expected 30+ tools, got {len(d[\"tools\"])}'"
+          curl -sf http://127.0.0.1:8765/api/workflows | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d['workflows'])>=5, f'Expected 5+ workflows'"
+          curl -sf http://127.0.0.1:8765/metrics | grep -q pdf_agent_http
+          kill $SERVER_PID
+          echo "Smoke tests passed"
+
   docker-build:
-    name: Docker Build
+    name: Docker Build & Push
     runs-on: ubuntu-latest
     needs: lint-and-test
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - uses: actions/checkout@v4
@@ -72,22 +92,33 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build image (dev)
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push dev image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          push: false
-          tags: pdf-agent:dev
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build image (prod)
+      - name: Build and push prod image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.prod
-          push: false
-          tags: pdf-agent:prod
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:prod
+            ghcr.io/${{ github.repository }}:prod-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
