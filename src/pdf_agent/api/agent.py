@@ -352,6 +352,7 @@ class BatchRequest(BaseModel):
     tool_name: str
     file_ids: list[str]
     tool_params: dict = {}
+    webhook_url: str | None = None
 
 
 @router.post("/batch")
@@ -409,6 +410,17 @@ async def batch_run(req: BatchRequest, request: Request):
                 "thread_id": thread_id,
                 "files": files_out or [],
                 "output": output,
+            })
+
+        if req.webhook_url:
+            from pdf_agent.webhook import schedule_webhook
+            schedule_webhook(req.webhook_url, {
+                "event": "batch_complete",
+                "tool": req.tool_name,
+                "results": [
+                    {"file_id": fid, "thread_id": tid, "files": fo or [], "output": out}
+                    for tid, fid, fo, out in results
+                ],
             })
 
         yield _sse_event("done", {})

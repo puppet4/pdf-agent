@@ -123,7 +123,19 @@ mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
 .btn-attach{background:none;border:1px solid var(--border);width:40px;height:40px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;color:var(--text-secondary);transition:border-color .15s;flex-shrink:0}
 .btn-attach:hover{border-color:var(--accent);color:var(--accent)}
 
-/* Tabs */
+/* Tool runner panel */
+.tool-runner{border-top:1px solid var(--border);padding:10px;flex-shrink:0}
+.tool-runner h4{font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
+.tool-runner select{width:100%;border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px;font-size:13px;background:var(--bg-input);color:var(--text);outline:none;margin-bottom:6px}
+.tool-runner .tr-params{display:flex;flex-direction:column;gap:4px;margin-bottom:6px}
+.tool-runner .tr-param label{font-size:11px;color:var(--text-secondary);margin-bottom:2px;display:block}
+.tool-runner .tr-param input{width:100%;border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;background:var(--bg-input);color:var(--text);outline:none}
+.tool-runner .btn-run{width:100%;background:var(--accent);color:#fff;border:none;padding:7px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;cursor:pointer;transition:background .15s}
+.tool-runner .btn-run:hover{background:var(--accent-hover)}
+.tool-runner .btn-run:disabled{opacity:.5;cursor:not-allowed}
+.tool-runner .tr-result{margin-top:8px;font-size:12px;color:var(--text-secondary);background:var(--bg-tool);border-radius:4px;padding:8px;display:none}
+.tool-runner .tr-result.visible{display:block}
+.tool-runner .tr-result a{color:var(--accent);display:block;margin-top:4px}
 .sidebar-tabs{display:flex;border-bottom:1px solid var(--border)}
 .sidebar-tab{flex:1;padding:8px 4px;font-size:12px;font-weight:500;text-align:center;cursor:pointer;color:var(--text-secondary);border:none;background:none;border-bottom:2px solid transparent;transition:all .15s}
 .sidebar-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
@@ -216,6 +228,14 @@ mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
         <button class="btn-icon" onclick="loadFileManager()" title="Refresh">&#8635;</button>
       </div>
       <div class="file-manager" id="fileManager"><div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px">Loading files...</div></div>
+      <!-- Direct tool runner -->
+      <div class="tool-runner" id="toolRunner">
+        <h4>&#9889; Run Tool</h4>
+        <select id="trToolSelect" onchange="onToolSelect()"><option value="">Select a tool...</option></select>
+        <div class="tr-params" id="trParams"></div>
+        <button class="btn-run" id="btnRun" onclick="runToolDirect()" disabled>Run on selected file</button>
+        <div class="tr-result" id="trResult"></div>
+      </div>
     </div>
 
     <!-- Workflows tab -->
@@ -407,6 +427,105 @@ function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrol
 function toggleSidebar(){$('sidebar').classList.toggle('open');}
 function renderMd(t){if(!t)return'';let h=esc(t);h=h.replace(/```(\w*)\n([\s\S]*?)```/g,(_,l,c)=>`<pre><code>${c}</code></pre>`);h=h.replace(/`([^`]+)`/g,'<code>$1</code>');h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');h=h.replace(/\*(.+?)\*/g,'<em>$1</em>');h=h.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');h=h.replace(/\n\n+/g,'</p><p>');h=h.replace(/\n/g,'<br>');return'<p>'+h+'</p>';}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+
+// ---------------------------------------------------------------------------
+// Direct Tool Runner
+// ---------------------------------------------------------------------------
+let _allTools = [];
+let _selectedFileForTool = null;
+
+async function loadToolList() {
+  try {
+    const d = await api('/api/tools');
+    _allTools = d.tools || [];
+    const sel = $('trToolSelect');
+    while (sel.options.length > 1) sel.remove(1);
+    _allTools.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.name; opt.textContent = t.label || t.name;
+      sel.appendChild(opt);
+    });
+  } catch {}
+}
+
+function onToolSelect() {
+  const toolName = $('trToolSelect').value;
+  const $params = $('trParams');
+  $params.innerHTML = '';
+  $('trResult').className = 'tr-result';
+  if (!toolName) { $('btnRun').disabled = true; return; }
+  const tool = _allTools.find(t => t.name === toolName);
+  if (tool && tool.params) {
+    tool.params.forEach(p => {
+      const div = document.createElement('div');
+      div.className = 'tr-param';
+      const opts = p.options ? p.options.join(', ') : '';
+      div.innerHTML = `<label>${esc(p.label)}${p.required?' *':''}${opts?' ('+esc(opts)+')':''}</label>`;
+      if (p.options && p.options.length) {
+        div.innerHTML += `<select id="trp_${p.name}" style="width:100%;border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;background:var(--bg-input);color:var(--text)">${p.options.map(o=>`<option value="${esc(o)}"${o===p.default?' selected':''}>${esc(o)}</option>`).join('')}</select>`;
+      } else {
+        div.innerHTML += `<input id="trp_${p.name}" type="text" value="${esc(p.default||'')}" placeholder="${esc(p.description||'')}">`;
+      }
+      $params.appendChild(div);
+    });
+  }
+  $('btnRun').disabled = !_selectedFileForTool;
+}
+
+function selectFileForTool(fileId, fileName) {
+  _selectedFileForTool = fileId;
+  const h4 = document.querySelector('.tool-runner h4');
+  if (h4) h4.textContent = `\u26A1 Run Tool on: ${fileName.length > 20 ? fileName.slice(0,18)+'...' : fileName}`;
+  if ($('trToolSelect').value) $('btnRun').disabled = false;
+}
+
+async function runToolDirect() {
+  const toolName = $('trToolSelect').value;
+  if (!toolName || !_selectedFileForTool) return;
+  const tool = _allTools.find(t => t.name === toolName);
+  const params = {};
+  if (tool && tool.params) {
+    tool.params.forEach(p => {
+      const el = document.getElementById('trp_' + p.name);
+      if (el && el.value) params[p.name] = el.value;
+    });
+  }
+  $('btnRun').disabled = true;
+  $('btnRun').textContent = 'Running...';
+  $('trResult').className = 'tr-result';
+  try {
+    const d = await api(`/api/tools/${toolName}/run`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ file_ids: [_selectedFileForTool], params }),
+    });
+    let html = `<strong>Done</strong> \u2014 ${esc(d.log||'')}`;
+    if (d.output_files && d.output_files.length) {
+      html += d.output_files.map(f => `<a href="${f.download_url}" download>&#8681; ${esc(f.filename)} (${(f.size_bytes/1024).toFixed(0)}KB)</a>`).join('');
+    }
+    $('trResult').innerHTML = html;
+    $('trResult').className = 'tr-result visible';
+  } catch (e) {
+    $('trResult').innerHTML = `<span style="color:#ef4444">Error: ${esc(e.message)}</span>`;
+    $('trResult').className = 'tr-result visible';
+  }
+  $('btnRun').disabled = false;
+  $('btnRun').textContent = 'Run on selected file';
+}
+
+const _baseRenderFileManager = renderFileManager;
+renderFileManager = function() {
+  _baseRenderFileManager();
+  document.querySelectorAll('.file-item').forEach((el, i) => {
+    const f = _fileManagerFiles[i];
+    if (!f) return;
+    const btn = document.createElement('button');
+    btn.className = 'fi-btn'; btn.title = 'Select for tool'; btn.textContent = '\u2713';
+    btn.style.color = 'var(--accent)';
+    btn.onclick = () => selectFileForTool(f.id, f.orig_name);
+    el.querySelector('.fi-actions').prepend(btn);
+  });
+};
 
 // Workflows
 async function loadWorkflows(){
@@ -619,7 +738,7 @@ async function saveWorkflow() {
 $('wfModal').addEventListener('click', e => { if (e.target === $('wfModal')) closeWorkflowModal(); });
 
 // Init
-loadThreads();loadWorkflows();$input.focus();
+loadThreads();loadWorkflows();loadToolList();$input.focus();
 </script>
 
 <!-- Workflow create/edit modal -->
