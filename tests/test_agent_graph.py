@@ -1,16 +1,12 @@
 """Tests for the LangGraph agent graph construction and execution."""
 from __future__ import annotations
 
-import json
 import os
 import time
-from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
-from pdf_agent.agent.state import AgentState, FileInfo, files_reducer
+from pdf_agent.agent.state import FileInfo, files_reducer
 
 
 # ---------------------------------------------------------------------------

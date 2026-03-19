@@ -10,7 +10,6 @@ import uuid
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from pdf_agent.agent.state import FileInfo
 from pdf_agent.api.agent import (
     _extract_output_files,
     _paths_to_download_urls,
