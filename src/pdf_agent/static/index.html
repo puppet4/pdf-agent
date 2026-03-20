@@ -202,7 +202,26 @@ mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
 .empty-state h3{font-size:18px;color:var(--text);font-weight:600}
 .empty-state p{font-size:14px;text-align:center;max-width:360px;line-height:1.5}
 
-/* Batch run */
+/* History panel */
+.history-panel{border-top:1px solid var(--border);padding:8px 10px;flex-shrink:0;max-height:180px;overflow-y:auto}
+.history-panel h4{font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.hist-item{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px}
+.hist-item:last-child{border-bottom:none}
+.hist-tool{font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist-time{font-size:10px;color:var(--text-secondary);flex-shrink:0}
+.hist-dl{color:var(--accent);text-decoration:none;font-size:11px;flex-shrink:0}
+.hist-dl:hover{text-decoration:underline}
+/* Fullscreen page view */
+.fullscreen-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:200;align-items:center;justify-content:center}
+.fullscreen-overlay.open{display:flex}
+.fullscreen-overlay img{max-width:90vw;max-height:90vh;object-fit:contain;border-radius:4px;box-shadow:0 4px 32px rgba(0,0,0,.5)}
+.fullscreen-overlay .fs-close{position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:28px;cursor:pointer;opacity:.7;transition:opacity .15s}
+.fullscreen-overlay .fs-close:hover{opacity:1}
+.fullscreen-overlay .fs-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.15);border:none;color:#fff;font-size:24px;padding:12px 16px;cursor:pointer;border-radius:4px;transition:background .15s}
+.fullscreen-overlay .fs-nav:hover{background:rgba(255,255,255,.3)}
+.fullscreen-overlay .fs-prev{left:16px}
+.fullscreen-overlay .fs-next{right:16px}
+.fullscreen-overlay .fs-info{position:absolute;bottom:16px;color:rgba(255,255,255,.7);font-size:13px}
 .batch-bar{border-top:1px solid var(--border);padding:8px 10px;background:rgba(79,70,229,.04);display:none;align-items:center;gap:8px;font-size:12px;flex-shrink:0}
 .batch-bar.open{display:flex}
 .batch-bar .bb-count{flex:1;color:var(--text-secondary)}
@@ -271,6 +290,11 @@ mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
         <div class="tr-params" id="trParams"></div>
         <button class="btn-run" id="btnRun" onclick="runToolDirect()" disabled>Run on selected file</button>
         <div class="tr-result" id="trResult"></div>
+      </div>
+      <!-- Run history -->
+      <div class="history-panel" id="historyPanel">
+        <h4>&#128196; Recent Runs <button onclick="loadHistory()" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:10px;margin-left:4px">&#8635;</button></h4>
+        <div id="historyList"><span style="color:var(--text-secondary);font-size:11px">No runs yet</span></div>
       </div>
     </div>
 
@@ -587,6 +611,7 @@ async function showPagePreviewer(fileId, fileName, pageCount) {
     thumb.className = 'page-thumb';
     thumb.dataset.page = i;
     thumb.onclick = () => togglePageSelection(thumb, i);
+    thumb.ondblclick = () => openFsView(_previewFileId, i, _previewPageCount);
     thumb.innerHTML = `<img src="/api/files/${fileId}/pages/${i}" loading="lazy" onerror="this.style.display='none'"><div class="pg-num">${i}</div>`;
     _makeDraggable(thumb);
     $strip.appendChild(thumb);
@@ -795,6 +820,7 @@ async function runToolDirect() {
   }
   $('btnRun').disabled = false;
   $('btnRun').textContent = 'Run on selected file';
+  loadHistory();
 }
 
 const _baseRenderFileManager = renderFileManager;
@@ -861,7 +887,7 @@ function switchTab(name, btn) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('tab-' + name).classList.add('active');
-  if (name === 'files') loadFileManager();
+  if (name === 'files') { loadFileManager(); loadHistory(); }
   if (name === 'workflows') loadWorkflowManager();
 }
 
@@ -1023,9 +1049,108 @@ async function saveWorkflow() {
 
 $('wfModal').addEventListener('click', e => { if (e.target === $('wfModal')) closeWorkflowModal(); });
 
+// ---------------------------------------------------------------------------
+// Fullscreen page viewer
+// ---------------------------------------------------------------------------
+let _fsFileId = null;
+let _fsCurrent = 1;
+let _fsTotal = 1;
+
+function openFsView(fileId, page, total) {
+  _fsFileId = fileId;
+  _fsCurrent = page;
+  _fsTotal = total;
+  _updateFsView();
+  $('fsOverlay').classList.add('open');
+}
+
+function closeFsView() {
+  $('fsOverlay').classList.remove('open');
+}
+
+function fsPrevPage() {
+  if (_fsCurrent > 1) { _fsCurrent--; _updateFsView(); }
+}
+
+function fsNextPage() {
+  if (_fsCurrent < _fsTotal) { _fsCurrent++; _updateFsView(); }
+}
+
+function _updateFsView() {
+  $('fsImg').src = `/api/files/${_fsFileId}/pages/${_fsCurrent}`;
+  $('fsInfo').textContent = `Page ${_fsCurrent} / ${_fsTotal}`;
+  $('fsPrev').style.opacity = _fsCurrent > 1 ? '1' : '0.3';
+  $('fsNext').style.opacity = _fsCurrent < _fsTotal ? '1' : '0.3';
+}
+
+document.addEventListener('keydown', e => {
+  if (!$('fsOverlay').classList.contains('open')) return;
+  if (e.key === 'ArrowLeft') fsPrevPage();
+  if (e.key === 'ArrowRight') fsNextPage();
+  if (e.key === 'Escape') closeFsView();
+});
+
+// ---------------------------------------------------------------------------
+// Tool run history
+// ---------------------------------------------------------------------------
+async function loadHistory() {
+  try {
+    const d = await api('/api/tools/history');
+    const $list = $('historyList');
+    const items = d.history || [];
+    if (!items.length) {
+      $list.innerHTML = '<span style="color:var(--text-secondary);font-size:11px">No runs yet</span>';
+      return;
+    }
+    $list.innerHTML = '';
+    items.forEach(h => {
+      const el = document.createElement('div');
+      el.className = 'hist-item';
+      const t = new Date(h.timestamp * 1000);
+      const timeStr = t.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      let dlHtml = '';
+      if (h.output_files && h.output_files.length) {
+        const urls = h.output_files.map(f => f.download_url);
+        dlHtml = `<a class="hist-dl" href="${h.output_files[0].download_url}" download>&#8681;</a>`;
+        if (h.output_files.length > 1) {
+          dlHtml += `<button class="hist-dl" style="border:none;background:none;cursor:pointer" onclick="downloadZip(${JSON.stringify(urls)})">&#128230;</button>`;
+        }
+      }
+      el.innerHTML = `<span class="hist-tool">${esc(h.tool)}</span><span class="hist-time">${timeStr}</span>${dlHtml}`;
+      $list.appendChild(el);
+    });
+  } catch {}
+}
+
+async function downloadZip(urls) {
+  try {
+    const resp = await fetch('/api/tools/download-zip', {
+      method: 'POST',
+      headers: hdrs({'Content-Type': 'application/json'}),
+      body: JSON.stringify({urls}),
+    });
+    if (!resp.ok) throw new Error('ZIP failed');
+    const blob = await resp.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'pdf_agent_results.zip';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) { alert('Download failed: ' + e.message); }
+}
+
 // Init
 loadThreads();loadWorkflows();loadToolList();$input.focus();
 </script>
+
+<!-- Fullscreen page viewer -->
+<div class="fullscreen-overlay" id="fsOverlay" onclick="if(event.target===this)closeFsView()">
+  <button class="fs-close" onclick="closeFsView()">&#215;</button>
+  <button class="fs-nav fs-prev" id="fsPrev" onclick="fsPrevPage()">&#8249;</button>
+  <img id="fsImg" src="" alt="">
+  <button class="fs-nav fs-next" id="fsNext" onclick="fsNextPage()">&#8250;</button>
+  <span class="fs-info" id="fsInfo"></span>
+</div>
 
 <!-- Workflow create/edit modal -->
 <div class="modal-overlay" id="wfModal">

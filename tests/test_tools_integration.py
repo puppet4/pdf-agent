@@ -289,7 +289,7 @@ class TestRegistration:
     def test_all_tools_registered(self):
         from pdf_agent.tools._builtins import get_builtin_tools
         tools = get_builtin_tools()
-        assert len(tools) == 41
+        assert len(tools) == 44
         names = {t.name for t in tools}
         expected = {
             "merge", "split", "rotate", "metadata_info", "set_metadata", "remove_metadata",
@@ -300,7 +300,7 @@ class TestRegistration:
             "pdf_to_images", "pdf_to_word", "pdf_to_excel", "pdf_to_ppt",
             "pdf_to_text", "pdf_to_html", "pdf_to_markdown", "pdf_to_pdfa",
             "crop", "resize", "flatten", "remove_blank_pages",
-            "nup", "qr_code", "compare", "tile_pages",
+            "nup", "qr_code", "compare", "tile_pages", "barcode", "linearize", "page_border",
             "form_fill", "signature_info", "signature", "deskew",
             "reverse_pages",
         }

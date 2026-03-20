@@ -223,6 +223,54 @@ async def download_tool_result(run_id: str, filename: str):
 
 
 # ---------------------------------------------------------------------------
+# ZIP batch download
+# ---------------------------------------------------------------------------
+
+class ZipRequest(BaseModel):
+    """Download multiple tool result files as a ZIP archive."""
+    urls: list[str]  # list of /api/tools/results/... URLs
+
+
+@router.post(
+    "/download-zip",
+    summary="Download multiple tool results as ZIP",
+    description="Pass a list of download URLs from tool runs and get back a single ZIP file.",
+)
+async def download_zip(req: ZipRequest):
+    """Bundle multiple result files into a ZIP and return it."""
+    import zipfile
+    import io as _io
+    from fastapi.responses import StreamingResponse
+
+    buf = _io.BytesIO()
+    added = 0
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for url in req.urls:
+            # URL format: /api/tools/results/{run_id}/{filename}
+            parts = url.strip("/").split("/")
+            if len(parts) < 4 or parts[0] != "api" or parts[1] != "tools" or parts[2] != "results":
+                continue
+            run_id = parts[3]
+            filename = parts[4] if len(parts) > 4 else ""
+            if not run_id.startswith("direct_") or not filename:
+                continue
+            file_path = settings.threads_dir / run_id / filename
+            if file_path.is_file():
+                zf.write(file_path, arcname=filename)
+                added += 1
+
+    if added == 0:
+        raise HTTPException(status_code=404, detail="No valid files found")
+
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=pdf_agent_results.zip"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Drag-and-drop page reorder
 # ---------------------------------------------------------------------------
 
