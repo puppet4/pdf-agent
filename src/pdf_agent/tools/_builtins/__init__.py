@@ -46,6 +46,9 @@ def get_builtin_tools() -> list[BaseTool]:
     from pdf_agent.tools._builtins.header_footer import HeaderFooterTool
     from pdf_agent.tools._builtins.remove_metadata import RemoveMetadataTool
     from pdf_agent.tools._builtins.pdf_to_pdfa import PdfATool
+    from pdf_agent.tools._builtins.barcode import BarcodeTool
+    from pdf_agent.tools._builtins.linearize import LinearizeTool
+    from pdf_agent.tools._builtins.page_border import PageBorderTool
 
     return [
         MergeTool(), SplitTool(), RotateTool(),
@@ -54,7 +57,8 @@ def get_builtin_tools() -> list[BaseTool]:
         EncryptTool(), DecryptTool(),
         WatermarkTextTool(), WatermarkImageTool(), StampTool(),
         HeaderFooterTool(), AddPageNumbersTool(), ImagesToPdfTool(),
-        CompressTool(), RepairTool(), OcrTool(),
+        BarcodeTool(), PageBorderTool(),
+        CompressTool(), RepairTool(), LinearizeTool(), OcrTool(),
         PdfToImagesTool(), PdfToWordTool(), PdfToExcelTool(), PdfToPptTool(),
         PdfToTextTool(), PdfToHtmlTool(), PdfToMarkdownTool(), PdfATool(),
         CropTool(), ResizeTool(), FlattenTool(),
