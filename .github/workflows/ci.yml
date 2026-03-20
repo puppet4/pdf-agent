@@ -68,7 +68,14 @@ jobs:
         run: |
           uvicorn pdf_agent.main:app --host 127.0.0.1 --port 8765 &
           SERVER_PID=$!
-          sleep 5
+          # Wait for server to be ready (up to 30s)
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8765/healthz > /dev/null 2>&1; then
+              echo "Server ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
 
           # Health + tools count
           curl -sf http://127.0.0.1:8765/healthz | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['database']=='ok', f'DB check failed: {d}'"

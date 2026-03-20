@@ -114,7 +114,12 @@ async def lifespan(app: FastAPI):
 
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     checkpointer = AsyncPostgresSaver(pool)
-    await checkpointer.setup()
+    try:
+        await checkpointer.setup()
+    except Exception as exc:
+        # setup() may fail if called inside a transaction (e.g. CREATE INDEX CONCURRENTLY).
+        # This is safe to ignore on subsequent startups — tables already exist.
+        logger.warning("Checkpointer setup warning (usually safe to ignore): %s", exc)
 
     # Build and compile graph
     from pdf_agent.agent.graph import build_graph
