@@ -22,6 +22,7 @@ class ValidateTool(BaseTool):
             outputs=ToolOutputSpec(type="json"),
             params=[],
             engine="qpdf",
+            async_hint=True,
         )
 
     def validate(self, params: dict) -> dict:
