@@ -17,7 +17,7 @@ from psycopg_pool import AsyncConnectionPool
 from pdf_agent.config import settings
 from pdf_agent.core import PDFAgentError
 from pdf_agent.api.router import api_router
-from pdf_agent.api.middleware import ApiKeyMiddleware, JWTMiddleware, RateLimitMiddleware, RequestIdMiddleware
+from pdf_agent.api.middleware import ApiKeyMiddleware, RateLimitMiddleware, RequestIdMiddleware
 from pdf_agent.tools.registry import load_builtin_tools, registry
 
 
@@ -39,14 +39,59 @@ _configure_logging()
 logger = logging.getLogger(__name__)
 
 
-async def _cleanup_loop():
+def _sync_database_url(database_url: str) -> str:
+    """Convert async SQLAlchemy/Postgres URLs into a sync psycopg URL."""
+    return database_url.replace("postgresql+asyncpg://", "postgresql://")
+
+
+async def _cleanup_thread_checkpoints(checkpointer, thread_ids: list[str]) -> int:
+    """Delete persisted checkpoint state for known thread ids."""
+    if checkpointer is None:
+        return 0
+
+    removed = 0
+    for thread_id in thread_ids:
+        try:
+            await checkpointer.adelete_thread(thread_id)
+            removed += 1
+        except Exception:
+            logger.warning("Failed to clean up checkpoint state for %s", thread_id, exc_info=True)
+    return removed
+
+
+async def _cleanup_expired_threads_with_checkpointer(
+    checkpointer,
+    thread_ids: list[str] | None = None,
+) -> int:
+    """Delete expired thread workdirs and matching checkpoint state."""
+    from pdf_agent.storage import storage
+
+    expired = thread_ids if thread_ids is not None else storage.list_expired_threads()
+    removed = 0
+    for thread_id in expired:
+        try:
+            storage.cleanup_thread(thread_id)
+            removed += 1
+            if checkpointer is not None:
+                try:
+                    await checkpointer.adelete_thread(thread_id)
+                except Exception:
+                    logger.warning("Failed to clean up checkpoint state for %s", thread_id, exc_info=True)
+        except Exception:
+            logger.exception("Failed to clean up expired thread %s", thread_id)
+    return removed
+
+
+async def _cleanup_loop(app: FastAPI):
     """Periodically clean up expired thread workdirs and uploaded files."""
     from pdf_agent.storage import storage
 
     while True:
         await asyncio.sleep(3600)  # every hour
         try:
-            removed_threads = storage.cleanup_expired_threads()
+            removed_threads = await _cleanup_expired_threads_with_checkpointer(
+                getattr(app.state, "checkpointer", None)
+            )
             removed_uploads = storage.cleanup_expired_uploads()
             if removed_threads or removed_uploads:
                 logger.info("Cleaned up %d thread(s), %d upload(s)", removed_threads, removed_uploads)
@@ -85,57 +130,90 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting %s ...", settings.app_name)
     settings.ensure_dirs()
-
-    if not settings.openai_api_key:
-        raise RuntimeError(
-            "PDF_AGENT_OPENAI_API_KEY is not set. "
-            "Please set it via environment variable or .env file."
-        )
-
-    _setup_langsmith()
     _setup_sentry()
 
-    load_builtin_tools()
+    if len(registry) == 0:
+        load_builtin_tools()
     logger.info("Loaded %d tools", len(registry))
 
     # Run initial cleanup
     from pdf_agent.storage import storage
-    removed = storage.cleanup_expired_threads()
+    expired_thread_ids = storage.list_expired_threads()
+    removed = await _cleanup_expired_threads_with_checkpointer(None, thread_ids=expired_thread_ids)
     if removed:
         logger.info("Startup cleanup: removed %d expired thread(s)", removed)
 
-    # Initialize LangGraph checkpointer
-    pool = AsyncConnectionPool(
-        conninfo=settings.checkpointer_db_url,
-        max_size=20,
-        open=False,
-    )
-    await pool.open()
+    app.state.graph = None
+    app.state.pool = None
+    app.state.checkpointer = None
 
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    checkpointer = AsyncPostgresSaver(pool)
-    try:
-        await checkpointer.setup()
-    except Exception as exc:
-        # setup() may fail if called inside a transaction (e.g. CREATE INDEX CONCURRENTLY).
-        # This is safe to ignore on subsequent startups — tables already exist.
-        logger.warning("Checkpointer setup warning (usually safe to ignore): %s", exc)
+    if settings.openai_api_key:
+        _setup_langsmith()
 
-    # Build and compile graph
-    from pdf_agent.agent.graph import build_graph
-    app.state.graph = build_graph(checkpointer, registry)
-    app.state.pool = pool
-    logger.info("LangGraph agent initialized with model=%s", settings.openai_model)
+        pool: AsyncConnectionPool | None = None
+        checkpointer = None
+
+        try:
+            pool = AsyncConnectionPool(
+                conninfo=_sync_database_url(settings.database_url),
+                max_size=20,
+                open=False,
+            )
+            await pool.open()
+
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            checkpointer = AsyncPostgresSaver(pool)
+            try:
+                await checkpointer.setup()
+            except Exception as exc:
+                # setup() may fail if called inside a transaction (e.g. CREATE INDEX CONCURRENTLY).
+                # This is safe to ignore on subsequent startups — tables already exist.
+                logger.warning("Checkpointer setup warning (usually safe to ignore): %s", exc)
+        except Exception as exc:
+            logger.warning("Checkpointer unavailable; agent memory persistence disabled: %s", exc)
+            if pool is not None:
+                await pool.close()
+                pool = None
+            checkpointer = None
+
+        try:
+            from pdf_agent.agent.graph import build_graph
+
+            app.state.graph = build_graph(checkpointer, registry)
+            app.state.pool = pool
+            app.state.checkpointer = checkpointer
+            logger.info(
+                "LangGraph agent initialized with model=%s persistence=%s",
+                settings.openai_model,
+                "postgres" if checkpointer is not None else "disabled",
+            )
+        except Exception as exc:
+            logger.warning("Agent initialization failed; agent endpoints disabled: %s", exc)
+            if pool is not None:
+                await pool.close()
+            app.state.graph = None
+            app.state.pool = None
+            app.state.checkpointer = None
+    else:
+        logger.info("OpenAI API key not configured; agent endpoints disabled")
+
+    # Catch any expired threads that may still have persisted checkpoint state.
+    if app.state.checkpointer is not None and expired_thread_ids:
+        removed_checkpoints = await _cleanup_thread_checkpoints(app.state.checkpointer, expired_thread_ids)
+        if removed_checkpoints:
+            logger.info("Startup cleanup: removed %d expired checkpoint thread(s)", removed_checkpoints)
 
     # Start background cleanup task
-    cleanup_task = asyncio.create_task(_cleanup_loop())
+    cleanup_task = asyncio.create_task(_cleanup_loop(app))
 
     yield
 
     # Shutdown
     logger.info("Shutting down %s", settings.app_name)
     cleanup_task.cancel()
-    await pool.close()
+    pool = getattr(app.state, "pool", None)
+    if pool is not None:
+        await pool.close()
 
 
 app = FastAPI(
@@ -143,6 +221,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.state.graph = None
+app.state.pool = None
+app.state.checkpointer = None
 
 # Middleware (outermost first)
 if settings.metrics_enabled:
@@ -150,7 +231,6 @@ if settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware)
 
 app.add_middleware(RateLimitMiddleware)
-app.add_middleware(JWTMiddleware)
 app.add_middleware(ApiKeyMiddleware)
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(

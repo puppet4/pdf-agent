@@ -84,7 +84,7 @@ class TestSystemPrompt:
     def test_static_prompt_included(self):
         from pdf_agent.agent.prompt import build_system_prompt
         prompt = build_system_prompt([], [])
-        assert "PDF Agent" in prompt
+        assert "PDF Toolbox" in prompt
 
 
 # ---------------------------------------------------------------------------

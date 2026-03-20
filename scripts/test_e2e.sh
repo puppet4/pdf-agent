@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E2E validation script for PDF Agent with LangGraph.
+# E2E validation script for PDF Toolbox.
 # Prerequisites: docker compose up -d, OPENAI_API_KEY set.
 #
 # Usage:
@@ -12,7 +12,7 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://localhost:8000}"
 TIMEOUT=30
 
-echo "=== PDF Agent E2E Validation ==="
+echo "=== PDF Toolbox E2E Validation ==="
 
 # 1. Health check
 echo -n "[1/5] Health check... "
@@ -26,7 +26,7 @@ fi
 
 # 2. List tools
 echo -n "[2/5] Tool listing... "
-TOOL_COUNT=$(curl -s "$BASE_URL/api/tools" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
+TOOL_COUNT=$(curl -s "$BASE_URL/api/tools" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['tools']))")
 if [ "$TOOL_COUNT" -ge 20 ]; then
     echo "OK ($TOOL_COUNT tools)"
 else

@@ -1,5 +1,6 @@
 // State
 let currentThreadId = null, pendingFiles = [], isStreaming = false, chatHistory = [];
+let _capabilities = { agent: true, workflows: true };
 let apiKey = localStorage.getItem('pdf_agent_api_key') || '';
 const $ = id => document.getElementById(id);
 const $messages = $('messages'), $input = $('msgInput'), $threadList = $('threadList');
@@ -20,8 +21,65 @@ function toggleTheme() {
 }
 (function(){const t=localStorage.getItem('pdf_agent_theme');if(t){document.documentElement.dataset.theme=t;if(t==='dark')$('themeBtn').innerHTML='&#9788;';}})();
 
+function getTabButton(name) {
+  return [...document.querySelectorAll('.sidebar-tab')].find(btn => {
+    return (btn.getAttribute('onclick') || '').includes(`switchTab('${name}'`);
+  }) || null;
+}
+
+function setChatAvailability(enabled) {
+  const chatBtn = getTabButton('chat');
+  $('btnNew').disabled = !enabled;
+  $('btnNew').style.opacity = enabled ? '1' : '0.5';
+  $input.disabled = !enabled;
+  $input.placeholder = enabled ? 'Type a message...' : 'Agent chat unavailable. Use Files tools instead.';
+  $('btnSend').disabled = !enabled || isStreaming;
+  if (chatBtn) {
+    chatBtn.disabled = !enabled;
+    chatBtn.style.opacity = enabled ? '1' : '0.5';
+    chatBtn.title = enabled ? '' : 'Agent chat unavailable';
+  }
+}
+
+function setWorkflowAvailability(enabled) {
+  const workflowBtn = getTabButton('workflows');
+  $('workflowBar').style.display = enabled ? '' : 'none';
+  $('tab-workflows').style.display = enabled ? '' : 'none';
+  if (workflowBtn) workflowBtn.style.display = enabled ? '' : 'none';
+}
+
+function applyCapabilities() {
+  const agentAvailable = !!_capabilities.agent;
+  const workflowAvailable = !!_capabilities.workflows;
+  setChatAvailability(agentAvailable);
+  setWorkflowAvailability(workflowAvailable);
+  if (!agentAvailable) {
+    $('emptyTitle').textContent = 'PDF Toolbox';
+    $('emptyDesc').textContent = 'Agent workflows are unavailable right now. Use the Files tab to upload PDFs and run tools directly.';
+    switchTab('files', getTabButton('files'));
+  }
+}
+
+async function loadCapabilities() {
+  try {
+    const data = await api('/healthz');
+    const agentAvailable = data.agent === 'ready';
+    _capabilities = {
+      agent: agentAvailable,
+      workflows: agentAvailable,
+    };
+  } catch {
+    _capabilities = { agent: false, workflows: false };
+  }
+  applyCapabilities();
+  return _capabilities;
+}
+
 // Threads
-async function loadThreads(){try{const d=await api('/api/agent/threads');renderThreadList(d.threads||[]);}catch{}}
+async function loadThreads(){
+  if(!_capabilities.agent){renderThreadList([]);return;}
+  try{const d=await api('/api/agent/threads');renderThreadList(d.threads||[]);}catch{}
+}
 function renderThreadList(threads){
   $threadList.innerHTML='';
   threads.forEach(t=>{const el=document.createElement('div');el.className='thread-item'+(t.thread_id===currentThreadId?' active':'');
@@ -30,6 +88,7 @@ function renderThreadList(threads){
     $threadList.appendChild(el);});
 }
 async function openThread(tid){
+  if(!_capabilities.agent)return;
   currentThreadId=tid;$chatTitle.textContent=tid.slice(0,12)+'...';clearMessages();chatHistory=[];
   try{const d=await api(`/api/agent/threads/${tid}`);
     (d.messages||[]).forEach(m=>{
@@ -90,6 +149,7 @@ document.addEventListener('drop',e=>{e.preventDefault();$uploadZone.classList.re
 
 // Send (SSE)
 async function sendMessage(){
+  if(!_capabilities.agent){alert('Agent chat is unavailable. Use Files tools instead.');return;}
   const text=$input.value.trim();if(!text||isStreaming)return;
   addMessage('user',text);chatHistory.push({role:'user',content:text});
   $input.value='';autoResize($input);
@@ -211,7 +271,7 @@ async function openBatchRun() {
   bar.querySelector('.btn-batch').textContent = 'Running...';
 
   // Switch to chat tab and show progress
-  switchTab('chat', document.querySelectorAll('.sidebar-tab')[0]);
+  switchTab('chat', getTabButton('chat'));
   addMessage('agent', `&#9889; Running **${toolName}** on ${fileIds.length} file(s)...`);
 
   let success = 0, failed = 0;
@@ -489,9 +549,11 @@ renderFileManager = function() {
 
 // Workflows
 async function loadWorkflows(){
+  const bar=$('workflowBar');
+  bar.innerHTML='<span class="wf-label">&#9889;</span>';
+  if(!_capabilities.workflows)return;
   try{
     const d=await api('/api/workflows');
-    const bar=$('workflowBar');
     (d.workflows||[]).forEach(w=>{
       const btn=document.createElement('button');
       btn.className='wf-btn';
@@ -503,6 +565,7 @@ async function loadWorkflows(){
   }catch{}
 }
 async function applyWorkflow(w){
+  if(!_capabilities.workflows){alert('Agent workflows are unavailable right now.');return;}
   if(!w.params||w.params.length===0){
     // No params needed, just set the prompt
     $input.value=w.prompt_template;
@@ -533,6 +596,12 @@ async function applyWorkflow(w){
 // Tabs
 // ---------------------------------------------------------------------------
 function switchTab(name, btn) {
+  if ((name === 'chat' && !_capabilities.agent) || (name === 'workflows' && !_capabilities.workflows)) {
+    name = 'files';
+    btn = getTabButton('files');
+  }
+  if (!btn) btn = getTabButton(name);
+  if (!btn) return;
   document.querySelectorAll('.sidebar-tab').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
@@ -609,9 +678,13 @@ async function deleteFileFromManager(fileId) {
 }
 
 function useFileInChat(fileId, name, mime) {
+  if (!_capabilities.agent) {
+    alert('Agent chat is unavailable. Run a direct tool instead.');
+    return;
+  }
   pendingFiles.push({ id: fileId, name, mime });
   renderFileChips();
-  switchTab('chat', document.querySelectorAll('.sidebar-tab')[0]);
+  switchTab('chat', getTabButton('chat'));
 }
 
 // ---------------------------------------------------------------------------
@@ -621,6 +694,10 @@ let _editingWorkflowId = null;
 
 async function loadWorkflowManager() {
   const $wm = $('wfManager');
+  if (!_capabilities.workflows) {
+    $wm.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px">Agent workflows are unavailable right now.</div>';
+    return;
+  }
   try {
     const d = await api('/api/workflows');
     $wm.innerHTML = '';
@@ -645,10 +722,14 @@ async function loadWorkflowManager() {
 }
 
 async function applyWorkflowById(wfId) {
+  if (!_capabilities.workflows) {
+    alert('Agent workflows are unavailable right now.');
+    return;
+  }
   try {
     const w = await api(`/api/workflows/${wfId}`);
     await applyWorkflow(w);
-    switchTab('chat', document.querySelectorAll('.sidebar-tab')[0]);
+    switchTab('chat', getTabButton('chat'));
   } catch (e) { alert('Error: ' + e.message); }
 }
 
@@ -682,6 +763,7 @@ async function editWorkflow(wfId) {
 }
 
 async function saveWorkflow() {
+  if (!_capabilities.workflows) { alert('Agent workflows are unavailable right now.'); return; }
   const name = $('wfName').value.trim();
   const prompt = $('wfPrompt').value.trim();
   if (!name || !prompt) { alert('Name and prompt template are required'); return; }
@@ -790,4 +872,11 @@ async function downloadZip(urls) {
 }
 
 // Init
-loadThreads();loadWorkflows();loadToolList();$input.focus();
+loadCapabilities().then(() => {
+  loadThreads();
+  loadWorkflows();
+  loadToolList();
+  loadFileManager();
+  loadHistory();
+  if (_capabilities.agent) $input.focus();
+});

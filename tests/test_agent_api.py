@@ -1,7 +1,9 @@
 """Tests for the agent API endpoints."""
 from __future__ import annotations
 
+import asyncio
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -16,6 +18,7 @@ def app():
     # Mock graph so we don't need a real LLM/DB
     mock_graph = AsyncMock()
     _app.state.graph = mock_graph
+    _app.state.checkpointer = AsyncMock()
     return _app
 
 
@@ -80,6 +83,40 @@ class TestApiKeyMiddleware:
             assert resp.status_code == 200
         finally:
             settings.api_key = original
+
+
+class TestSingleUserSurface:
+    def test_auth_routes_removed(self, client):
+        resp = client.get("/api/auth/me")
+        assert resp.status_code == 404
+
+    def test_batch_route_removed(self, client):
+        resp = client.post("/api/agent/batch", json={"tool_name": "rotate", "file_ids": []})
+        assert resp.status_code == 404
+
+    def test_app_starts_without_openai_key(self):
+        from pdf_agent.config import settings
+        from pdf_agent.main import app as _app
+
+        original_key = settings.openai_api_key
+        try:
+            settings.openai_api_key = ""
+            _app.state.graph = None
+            _app.state.checkpointer = None
+            with TestClient(_app) as client:
+                resp = client.get("/healthz")
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["llm"] == "not configured"
+                assert data["agent"] == "not initialized"
+                if data["database"] == "ok":
+                    assert data["status"] == "ok"
+                else:
+                    assert data["status"] == "degraded"
+                tools_resp = client.get("/api/tools")
+                assert tools_resp.status_code == 200
+        finally:
+            settings.openai_api_key = original_key
 
 
 class TestRateLimitMiddleware:
@@ -183,6 +220,25 @@ class TestChatEndpoint:
         )
         assert response.status_code == 503
 
+    def test_invalid_file_id_does_not_leave_empty_thread(self, client, app, tmp_path: Path):
+        """A validation failure should not create an empty thread directory."""
+        from pdf_agent.config import settings
+
+        original_data_dir = settings.data_dir
+        try:
+            settings.data_dir = tmp_path
+            settings.ensure_dirs()
+
+            response = client.post(
+                "/api/agent/chat",
+                json={"thread_id": "bad-thread", "message": "test", "file_ids": ["not-a-uuid"]},
+            )
+
+            assert response.status_code == 422
+            assert not (settings.threads_dir / "bad-thread").exists()
+        finally:
+            settings.data_dir = original_data_dir
+
     def test_tool_start_filters_internal_keys(self, client, app):
         """tool_start SSE event must not leak state or tool_call_id."""
         async def mock_stream(*args, **kwargs):
@@ -229,6 +285,59 @@ class TestChatEndpoint:
                     assert data["files"][0] == "/api/agent/threads/t1/files/step_0/rotated.pdf"
                     break
 
+    def test_invalid_file_id_returns_422(self, client):
+        response = client.post(
+            "/api/agent/chat",
+            json={"message": "test", "file_ids": ["not-a-uuid"]},
+        )
+        assert response.status_code == 422
+
+    def test_missing_uploaded_file_returns_404(self, client):
+        class FakeResult:
+            def scalar_one_or_none(self):
+                return None
+
+        class FakeSession:
+            async def execute(self, *args, **kwargs):
+                return FakeResult()
+
+        class FakeSessionFactory:
+            async def __aenter__(self):
+                return FakeSession()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        from pdf_agent.api import agent as agent_api
+        original_factory = agent_api.async_session_factory
+        agent_api.async_session_factory = lambda: FakeSessionFactory()
+        try:
+            response = client.post(
+                "/api/agent/chat",
+                json={"message": "test", "file_ids": ["00000000-0000-0000-0000-000000000000"]},
+            )
+        finally:
+            agent_api.async_session_factory = original_factory
+
+        assert response.status_code == 404
+
+    def test_progress_queue_released_when_stream_is_cancelled(self, client, app):
+        from pdf_agent.agent.tools_adapter import _progress_queues
+
+        class CancelledStream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise asyncio.CancelledError()
+
+        app.state.graph.astream_events = lambda *args, **kwargs: CancelledStream()
+
+        response = client.post("/api/agent/chat", json={"thread_id": "cancelled-thread", "message": "test"})
+
+        assert response.status_code == 200
+        assert "cancelled-thread" not in _progress_queues
+
 
 class TestThreadFilesEndpoint:
     def test_list_files_404_for_unknown_thread(self, client):
@@ -258,3 +367,38 @@ class TestThreadFilesEndpoint:
         finally:
             import shutil
             shutil.rmtree(settings.threads_dir / thread_id, ignore_errors=True)
+
+    def test_list_threads_excludes_direct_tool_runs(self, client):
+        from pdf_agent.config import settings
+
+        thread_dir = settings.threads_dir / "chat-thread-1"
+        direct_dir = settings.threads_dir / "direct_deadbeef"
+        thread_dir.mkdir(parents=True, exist_ok=True)
+        direct_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            response = client.get("/api/agent/threads")
+            assert response.status_code == 200
+            ids = [item["thread_id"] for item in response.json()["threads"]]
+            assert "chat-thread-1" in ids
+            assert "direct_deadbeef" not in ids
+        finally:
+            import shutil
+            shutil.rmtree(thread_dir, ignore_errors=True)
+            shutil.rmtree(direct_dir, ignore_errors=True)
+
+
+class TestThreadDeletion:
+    def test_delete_thread_cleans_checkpointer(self, client, app):
+        from pdf_agent.config import settings
+
+        thread_id = "thread-delete-test"
+        thread_dir = settings.threads_dir / thread_id
+        thread_dir.mkdir(parents=True, exist_ok=True)
+        (thread_dir / "step_0").mkdir(exist_ok=True)
+
+        response = client.delete(f"/api/agent/threads/{thread_id}")
+
+        assert response.status_code == 200
+        assert not thread_dir.exists()
+        app.state.checkpointer.adelete_thread.assert_awaited_once_with(thread_id)

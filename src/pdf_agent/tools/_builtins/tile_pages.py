@@ -2,14 +2,31 @@
 from __future__ import annotations
 
 import io
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pikepdf
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+
+
+def _render_first_page_png(pdf_path: Path, tmpdir: Path, dpi: int = 96) -> Path | None:
+    pdftoppm = shutil.which("pdftoppm")
+    if not pdftoppm:
+        return None
+    out_stem = tmpdir / pdf_path.stem
+    subprocess.run(
+        [pdftoppm, "-r", str(dpi), "-png", "-f", "1", "-l", "1", str(pdf_path), str(out_stem)],
+        capture_output=True, timeout=30,
+    )
+    candidates = list(tmpdir.glob(f"{pdf_path.stem}*.png"))
+    return candidates[0] if candidates else None
 
 
 class TilePagesTool(BaseTool):
@@ -18,7 +35,7 @@ class TilePagesTool(BaseTool):
             name="tile_pages",
             label="页面拼接",
             category="page_ops",
-            description="将多个 PDF 的页面横向或纵向拼接成一个宽版/长版页面",
+            description="将多个 PDF 的首页横向或纵向拼接成一个宽版/长版页面",
             inputs=ToolInputSpec(min=2, max=10, accept=["application/pdf"]),
             outputs=ToolOutputSpec(type="pdf"),
             params=[
@@ -31,7 +48,8 @@ class TilePagesTool(BaseTool):
                     description="horizontal=横向并排, vertical=纵向叠加",
                 ),
             ],
-            engine="pikepdf+reportlab",
+            engine="pikepdf+reportlab+poppler",
+            async_hint=True,
         )
 
     def validate(self, params: dict) -> dict:
@@ -41,11 +59,14 @@ class TilePagesTool(BaseTool):
         return {"direction": direction}
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
+        if not shutil.which("pdftoppm"):
+            raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "pdftoppm (poppler-utils) is not installed")
+
         params = self.validate(params)
         output_path = workdir / "tiled.pdf"
         direction = params["direction"]
 
-        # Render each PDF's first page to get dimensions
+        # Get page dimensions from each PDF
         page_dims = []
         for pdf_path in inputs:
             with pikepdf.open(pdf_path) as pdf:
@@ -64,29 +85,28 @@ class TilePagesTool(BaseTool):
         buf = io.BytesIO()
         c = canvas.Canvas(buf, pagesize=(total_w, total_h))
 
-        x_offset = 0.0
-        y_offset = total_h
-        for i, pdf_path in enumerate(inputs):
-            if reporter:
-                reporter(int(i / len(inputs) * 90), f"Processing {pdf_path.name}")
-            pw, ph = page_dims[i]
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            x_offset = 0.0
+            y_offset = total_h
 
-            # Render page to temp PDF bytes
-            tmp_buf = io.BytesIO()
-            with pikepdf.Pdf.new() as tmp:
-                with pikepdf.open(pdf_path) as src:
-                    tmp.pages.append(src.pages[0])
-                tmp.save(tmp_buf)
-            tmp_buf.seek(0)
+            for i, pdf_path in enumerate(inputs):
+                if reporter:
+                    reporter(int(i / len(inputs) * 90), f"Processing {pdf_path.name}")
+                pw, ph = page_dims[i]
 
-            if direction == "horizontal":
-                y = (total_h - ph) / 2
-                c.drawImage(tmp_buf, x_offset, y, width=pw, height=ph)
-                x_offset += pw
-            else:
-                y_offset -= ph
-                x = (total_w - pw) / 2
-                c.drawImage(tmp_buf, x, y_offset, width=pw, height=ph)
+                img_path = _render_first_page_png(pdf_path, tmpdir)
+                if not img_path:
+                    raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"Failed to render {pdf_path.name}")
+
+                if direction == "horizontal":
+                    y = (total_h - ph) / 2
+                    c.drawImage(ImageReader(str(img_path)), x_offset, y, width=pw, height=ph)
+                    x_offset += pw
+                else:
+                    y_offset -= ph
+                    x = (total_w - pw) / 2
+                    c.drawImage(ImageReader(str(img_path)), x, y_offset, width=pw, height=ph)
 
         c.save()
         buf.seek(0)

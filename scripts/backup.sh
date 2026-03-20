@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# PDF Agent backup script
+# PDF Toolbox backup script
 # Usage: ./scripts/backup.sh [backup_dir]
-# Cron (daily at 2am): 0 2 * * * /app/scripts/backup.sh /backups >> /var/log/pdf-agent-backup.log 2>&1
+# Cron (daily at 2am): 0 2 * * * /app/scripts/backup.sh /backups >> /var/log/pdf-toolbox-backup.log 2>&1
 
 set -euo pipefail
 
@@ -10,8 +10,9 @@ DATE=$(date +%Y%m%d_%H%M%S)
 DEST="${BACKUP_DIR}/${DATE}"
 KEEP_DAYS="${KEEP_DAYS:-7}"
 
-DB_URL="${PDF_AGENT_CHECKPOINTER_DB_URL:-postgresql://postgres:postgres@localhost:5432/pdf_agent}"
+DB_URL="${PDF_AGENT_DATABASE_URL:-postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent}"
 DATA_DIR="${PDF_AGENT_DATA_DIR:-data}"
+DB_URL="${DB_URL/postgresql+asyncpg:\/\//postgresql://}"
 
 mkdir -p "${DEST}"
 echo "[$(date)] Starting backup to ${DEST}"
@@ -45,7 +46,7 @@ fi
 
 # 3. Manifest
 cat > "${DEST}/manifest.txt" << EOF
-PDF Agent Backup
+PDF Toolbox Backup
 Date: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 Database: ${DB_NAME}@${DB_HOST}:${DB_PORT}
 Data dir: ${DATA_DIR}

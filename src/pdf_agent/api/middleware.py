@@ -14,7 +14,7 @@ from pdf_agent.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Paths that skip authentication
+# Paths that skip API key authentication
 _PUBLIC_PATHS = {"/healthz", "/docs", "/redoc", "/openapi.json", "/metrics"}
 
 
@@ -37,7 +37,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
-        if path in _PUBLIC_PATHS or path.startswith("/static") or path.startswith("/api/auth"):
+        if path in _PUBLIC_PATHS or path.startswith("/static"):
             return await call_next(request)
 
         provided = request.headers.get("X-API-Key") or request.query_params.get("api_key")
@@ -45,47 +45,6 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key"},
-            )
-
-        return await call_next(request)
-
-
-class JWTMiddleware(BaseHTTPMiddleware):
-    """Verify JWT Bearer token and set request.state.user when jwt_secret is configured."""
-
-    async def dispatch(self, request: Request, call_next):
-        if not settings.jwt_secret:
-            request.state.user = None
-            return await call_next(request)
-
-        path = request.url.path
-        if path in _PUBLIC_PATHS or path.startswith("/static") or path.startswith("/api/auth"):
-            request.state.user = None
-            return await call_next(request)
-
-        # API key takes precedence — if valid, skip JWT
-        if settings.api_key:
-            provided_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
-            if provided_key == settings.api_key:
-                request.state.user = None
-                return await call_next(request)
-
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Missing Bearer token"},
-            )
-
-        token = auth_header[7:]
-        try:
-            from pdf_agent.api.auth import verify_token
-            payload = verify_token(token)
-            request.state.user = {"id": payload["sub"], "email": payload.get("email", "")}
-        except Exception:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid or expired token"},
             )
 
         return await call_next(request)

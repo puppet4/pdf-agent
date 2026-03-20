@@ -1,10 +1,13 @@
 """N-up tool — arrange multiple PDF pages onto one page (2-up, 4-up, etc.)."""
 from __future__ import annotations
 
-import io
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pikepdf
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from pdf_agent.core import ErrorCode, ToolError
@@ -18,6 +21,21 @@ _LAYOUTS: dict[str, tuple[int, int]] = {
     "6-up": (3, 2),
     "9-up": (3, 3),
 }
+
+
+def _render_page_to_png(pdf_path: Path, page_idx: int, tmpdir: Path, dpi: int = 96) -> Path | None:
+    """Render a single PDF page to PNG using pdftoppm."""
+    pdftoppm = shutil.which("pdftoppm")
+    if not pdftoppm:
+        return None
+    out_stem = tmpdir / f"p{page_idx}"
+    subprocess.run(
+        [pdftoppm, "-r", str(dpi), "-png", "-f", str(page_idx + 1), "-l", str(page_idx + 1),
+         str(pdf_path), str(out_stem)],
+        capture_output=True, timeout=30,
+    )
+    candidates = list(tmpdir.glob(f"p{page_idx}*.png"))
+    return candidates[0] if candidates else None
 
 
 class NUpTool(BaseTool):
@@ -55,7 +73,8 @@ class NUpTool(BaseTool):
                     description="纸张方向",
                 ),
             ],
-            engine="pikepdf+reportlab",
+            engine="pikepdf+reportlab+poppler",
+            async_hint=True,
         )
 
     def validate(self, params: dict) -> dict:
@@ -69,6 +88,9 @@ class NUpTool(BaseTool):
         }
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
+        if not shutil.which("pdftoppm"):
+            raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "pdftoppm (poppler-utils) is not installed")
+
         params = self.validate(params)
         output_path = workdir / "nup.pdf"
 
@@ -80,16 +102,20 @@ class NUpTool(BaseTool):
         cols, rows = _LAYOUTS[params["layout"]]
         cell_w = pw / cols
         cell_h = ph / rows
-        margin = 4  # points
-
-        buf = io.BytesIO()
-        c = canvas.Canvas(buf, pagesize=(pw, ph))
+        margin = 4
 
         with pikepdf.open(inputs[0]) as src:
             total = len(src.pages)
-            per_sheet = cols * rows
-            sheet_count = (total + per_sheet - 1) // per_sheet
 
+        per_sheet = cols * rows
+        sheet_count = (total + per_sheet - 1) // per_sheet
+
+        import io
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=(pw, ph))
+
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
             for sheet_idx in range(sheet_count):
                 if reporter:
                     reporter(int(sheet_idx / sheet_count * 95), f"Sheet {sheet_idx+1}/{sheet_count}")
@@ -99,20 +125,17 @@ class NUpTool(BaseTool):
                         break
 
                     col = cell_idx % cols
-                    row = rows - 1 - (cell_idx // cols)  # top-to-bottom
+                    row = rows - 1 - (cell_idx // cols)
 
-                    # Render source page to temp PDF bytes
-                    tmp_buf = io.BytesIO()
-                    with pikepdf.Pdf.new() as tmp:
-                        tmp.pages.append(src.pages[page_idx])
-                        tmp.save(tmp_buf)
-                    tmp_buf.seek(0)
+                    img_path = _render_page_to_png(inputs[0], page_idx, tmpdir)
+                    if not img_path:
+                        continue
 
                     x = col * cell_w + margin
                     y = row * cell_h + margin
                     w = cell_w - 2 * margin
                     h = cell_h - 2 * margin
-                    c.drawImage(tmp_buf, x, y, width=w, height=h, preserveAspectRatio=True)
+                    c.drawImage(ImageReader(str(img_path)), x, y, width=w, height=h, preserveAspectRatio=True)
 
                 c.showPage()
 
