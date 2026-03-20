@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from pdf_agent.config import settings
@@ -244,7 +244,15 @@ async def delete_workflow(workflow_id: str):
     summary="Render workflow prompt",
     description="Substitute parameters into the workflow prompt template. Returns the prompt to send to /api/agent/chat.",
 )
-async def render_workflow(workflow_id: str, req: ExecuteRequest):
+async def render_workflow(workflow_id: str, req: ExecuteRequest, request: Request):
+    if req.workflow_id != workflow_id:
+        raise HTTPException(status_code=422, detail="workflow_id in path and body must match")
+    return await _render_workflow_impl(workflow_id, req, request)
+
+
+async def _render_workflow_impl(workflow_id: str, req: ExecuteRequest, request: Request | None = None):
+    if request is not None and getattr(request.app.state, "graph", None) is None:
+        raise HTTPException(status_code=503, detail="Agent workflows are not available")
     tmpl = _get_workflow(workflow_id)
     if not tmpl:
         raise HTTPException(status_code=404, detail="Workflow not found")

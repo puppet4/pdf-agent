@@ -1,6 +1,9 @@
 """Files API - upload, list, download files."""
 from __future__ import annotations
 
+import shutil
+import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -122,10 +125,6 @@ async def get_page_image(
     session: AsyncSession = Depends(get_session),
 ):
     """Render a specific PDF page as a JPG thumbnail."""
-    import shutil
-    import subprocess
-    import tempfile
-
     svc = FileService(session)
     record = await svc.get(file_id)
 
@@ -150,11 +149,14 @@ async def get_page_image(
 
     with tempfile.TemporaryDirectory() as td:
         out_stem = Path(td) / "page"
-        subprocess.run(
+        result = subprocess.run(
             [pdftoppm, "-r", "96", "-jpeg", "-f", str(page), "-l", str(page),
              "-scale-to", "400", str(pdf_path), str(out_stem)],
             capture_output=True, timeout=30,
         )
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="ignore").strip() or "unknown error"
+            raise HTTPException(status_code=500, detail=f"pdftoppm failed: {detail}")
         candidates = list(Path(td).glob("*.jpg"))
         if not candidates:
             raise HTTPException(status_code=500, detail="Failed to render page")

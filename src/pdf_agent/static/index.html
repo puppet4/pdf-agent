@@ -3,31 +3,31 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PDF Agent</title>
+<title>PDF Toolbox</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <div class="app">
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <h2 id="appTitle">PDF Agent</h2>
+      <h2 id="appTitle">PDF Toolbox</h2>
       <button class="btn-icon" onclick="toggleTheme()" id="themeBtn" title="Dark mode">&#9790;</button>
       <button class="btn-new" onclick="newChat()" id="btnNew">+ New</button>
     </div>
     <div class="sidebar-tabs">
-      <button class="sidebar-tab active" onclick="switchTab('chat',this)">&#128172; Chat</button>
-      <button class="sidebar-tab" onclick="switchTab('files',this)">&#128196; Files</button>
+      <button class="sidebar-tab" onclick="switchTab('chat',this)">&#128172; Chat</button>
+      <button class="sidebar-tab active" onclick="switchTab('files',this)">&#128196; Files</button>
       <button class="sidebar-tab" onclick="switchTab('workflows',this)">&#9889; Workflows</button>
     </div>
 
     <!-- Chat tab -->
-    <div class="tab-panel active" id="tab-chat">
+    <div class="tab-panel" id="tab-chat">
       <div class="search-bar"><input id="searchInput" placeholder="Search messages..." oninput="filterMessages(this.value)"></div>
       <div class="thread-list" id="threadList"></div>
     </div>
 
     <!-- Files tab -->
-    <div class="tab-panel" id="tab-files">
+    <div class="tab-panel active" id="tab-files">
       <div style="padding:8px 10px;border-bottom:1px solid var(--border);display:flex;gap:6px">
         <label style="flex:1;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;color:var(--accent)">
           <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx" style="display:none" onchange="uploadAndRefreshFiles(this.files)">
@@ -90,7 +90,7 @@
     <div class="messages" id="messages">
       <div class="empty-state" id="emptyState">
         <div class="es-icon">&#128196;</div>
-        <h3 id="emptyTitle">PDF Agent Toolbox</h3>
+        <h3 id="emptyTitle">PDF Toolbox</h3>
         <p id="emptyDesc">Upload a PDF and tell me what you'd like to do. I can rotate, merge, split, compress, watermark, OCR, and much more.</p>
       </div>
     </div>

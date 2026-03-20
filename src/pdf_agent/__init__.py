@@ -1,1 +1,1 @@
-"""PDF Agent Toolbox."""
+"""PDF Toolbox."""

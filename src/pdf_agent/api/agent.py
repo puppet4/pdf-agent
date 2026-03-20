@@ -52,19 +52,24 @@ async def _resolve_uploaded_files(file_ids: list[str]) -> list[FileInfo]:
     files: list[FileInfo] = []
     async with async_session_factory() as session:
         for fid in file_ids:
+            try:
+                parsed_id = uuid.UUID(fid)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=f"Invalid file_id: {fid}") from exc
             result = await session.execute(
-                select(FileRecord).where(FileRecord.id == uuid.UUID(fid))
+                select(FileRecord).where(FileRecord.id == parsed_id)
             )
             record = result.scalar_one_or_none()
-            if record:
-                files.append(FileInfo(
-                    file_id=str(record.id),
-                    path=record.storage_path,
-                    orig_name=record.orig_name,
-                    mime_type=record.mime_type,
-                    page_count=record.page_count,
-                    source="upload",
-                ))
+            if record is None:
+                raise HTTPException(status_code=404, detail=f"File {fid} not found")
+            files.append(FileInfo(
+                file_id=str(record.id),
+                path=record.storage_path,
+                orig_name=record.orig_name,
+                mime_type=record.mime_type,
+                page_count=record.page_count,
+                source="upload",
+            ))
     return files
 
 
@@ -119,18 +124,19 @@ async def chat(req: ChatRequest, request: Request):
 
     thread_id = req.thread_id or str(uuid.uuid4())
 
-    # Create thread workdir
-    thread_workdir = settings.threads_dir / thread_id
-    thread_workdir.mkdir(parents=True, exist_ok=True)
-
     # Resolve uploaded files
     uploaded_files = await _resolve_uploaded_files(req.file_ids)
     uploaded_paths = [f["path"] for f in uploaded_files]
+
+    # Create thread workdir only after request validation succeeds
+    thread_workdir = settings.threads_dir / thread_id
+    thread_workdir.mkdir(parents=True, exist_ok=True)
 
     # Build input state
     input_state: dict = {
         "messages": [{"role": "user", "content": req.message}],
         "thread_workdir": str(thread_workdir),
+        "configurable": {"thread_id": thread_id},
     }
     if uploaded_files:
         input_state["files"] = uploaded_files
@@ -213,9 +219,10 @@ async def chat(req: ChatRequest, request: Request):
         except Exception as e:
             logger.exception("Agent stream error")
             yield _sse_event("error", {"message": str(e)})
+        finally:
+            release_progress_queue(thread_id)
 
         yield _sse_event("done", {})
-        release_progress_queue(thread_id)
 
     return StreamingResponse(
         event_stream(),
@@ -280,7 +287,7 @@ async def list_threads():
 
     threads = []
     for entry in sorted(threads_dir.iterdir(), key=lambda e: e.stat().st_mtime, reverse=True):
-        if entry.is_dir():
+        if entry.is_dir() and not entry.name.startswith("direct_"):
             stat = entry.stat()
             step_count = sum(1 for d in entry.iterdir() if d.is_dir() and d.name.startswith("step_"))
             threads.append({
@@ -333,100 +340,17 @@ async def get_thread(thread_id: str, request: Request):
 
 
 @router.delete("/threads/{thread_id}")
-async def delete_thread(thread_id: str):
+async def delete_thread(thread_id: str, request: Request):
     """Delete a thread and its workdir."""
     thread_dir = settings.threads_dir / thread_id
     if not thread_dir.exists():
         raise HTTPException(status_code=404, detail="Thread not found")
 
     shutil.rmtree(thread_dir)
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+    if checkpointer is not None:
+        try:
+            await checkpointer.adelete_thread(thread_id)
+        except Exception:
+            logger.warning("Failed to delete checkpoint state for %s", thread_id, exc_info=True)
     return {"deleted": True, "thread_id": thread_id}
-
-
-# ---------------------------------------------------------------------------
-# Batch operations endpoint
-# ---------------------------------------------------------------------------
-
-class BatchRequest(BaseModel):
-    """Run the same tool on multiple files in parallel, each in its own thread."""
-    tool_name: str
-    file_ids: list[str]
-    tool_params: dict = {}
-    webhook_url: str | None = None
-
-
-@router.post("/batch")
-async def batch_run(req: BatchRequest, request: Request):
-    """Run a tool on multiple files concurrently. Returns SSE stream."""
-    graph = request.app.state.graph
-    if graph is None:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
-    if not req.file_ids:
-        raise HTTPException(status_code=422, detail="file_ids must not be empty")
-
-    # Build one message per file asking the agent to apply the tool
-    params_str = ", ".join(f"{k}={v}" for k, v in req.tool_params.items())
-    param_clause = f" with {params_str}" if params_str else ""
-
-    async def event_stream():
-        tasks = []
-        for fid in req.file_ids:
-            thread_id = str(uuid.uuid4())
-            msg = f"Apply {req.tool_name}{param_clause} to this file."
-            tasks.append((fid, thread_id, msg))
-
-        yield _sse_event("batch_start", {"count": len(tasks), "tool": req.tool_name})
-
-        async def run_one(fid: str, thread_id: str, msg: str):
-            uploaded = await _resolve_uploaded_files([fid])
-            if not uploaded:
-                return thread_id, fid, None, "File not found"
-            thread_workdir = settings.threads_dir / thread_id
-            thread_workdir.mkdir(parents=True, exist_ok=True)
-            input_state: dict = {
-                "messages": [{"role": "user", "content": msg}],
-                "thread_workdir": str(thread_workdir),
-                "files": uploaded,
-                "current_files": [f["path"] for f in uploaded],
-            }
-            config = {"configurable": {"thread_id": thread_id}}
-            output = ""
-            files_out: list[str] = []
-            try:
-                async for event in graph.astream_events(input_state, config=config, version="v2"):
-                    if event["event"] == "on_tool_end":
-                        out = event["data"].get("output", "")
-                        output = str(out)[:300]
-                        files_out = _paths_to_download_urls(thread_id, _extract_output_files(out))
-            except Exception as e:
-                return thread_id, fid, None, str(e)
-            return thread_id, fid, files_out, output
-
-        results = await asyncio.gather(*[run_one(fid, tid, msg) for fid, tid, msg in tasks])
-
-        for thread_id, fid, files_out, output in results:
-            yield _sse_event("batch_result", {
-                "file_id": fid,
-                "thread_id": thread_id,
-                "files": files_out or [],
-                "output": output,
-            })
-
-        if req.webhook_url:
-            from pdf_agent.webhook import schedule_webhook
-            schedule_webhook(req.webhook_url, {
-                "event": "batch_complete",
-                "tool": req.tool_name,
-                "results": [
-                    {"file_id": fid, "thread_id": tid, "files": fo or [], "output": out}
-                    for tid, fid, fo, out in results
-                ],
-            })
-
-        yield _sse_event("done", {})
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )

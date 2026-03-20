@@ -173,6 +173,14 @@ class TestE2EToolRun:
         names = {w["id"] for w in data["workflows"]}
         assert "scan-to-searchable" in names
 
+    def test_workflow_render_requires_agent(self, client, app):
+        app.state.graph = None
+        resp = client.post(
+            "/api/workflows/scan-to-searchable/render",
+            json={"workflow_id": "scan-to-searchable", "params": {}, "file_ids": []},
+        )
+        assert resp.status_code == 503
+
     def test_workflow_crud(self, client):
         """Create, retrieve, update, and delete a custom workflow."""
         # Create

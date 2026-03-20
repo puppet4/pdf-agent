@@ -29,12 +29,11 @@ async def healthz(request: Request):
         checks["llm"] = "configured"
     else:
         checks["llm"] = "not configured"
-        checks["status"] = "degraded"
 
     # Agent graph readiness
     graph = getattr(request.app.state, "graph", None)
     checks["agent"] = "ready" if graph is not None else "not initialized"
-    if graph is None:
+    if settings.openai_api_key and graph is None:
         checks["status"] = "degraded"
 
     # Tool count

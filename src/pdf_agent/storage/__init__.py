@@ -20,7 +20,8 @@ class LocalStorage:
         """Save an uploaded file and return its storage path."""
         dest_dir = settings.upload_dir / str(file_id)
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / filename
+        safe_name = Path(filename).name or "upload.bin"
+        dest = dest_dir / safe_name
         dest.write_bytes(content)
         return dest
 
@@ -46,25 +47,34 @@ class LocalStorage:
         if thread_dir.exists():
             shutil.rmtree(thread_dir)
 
-    def cleanup_expired_threads(self) -> int:
-        """Remove thread workdirs older than thread_ttl_hours. Returns count removed."""
+    def list_expired_threads(self) -> list[str]:
+        """Return thread ids whose workdirs are older than thread_ttl_hours."""
         threads_dir = settings.threads_dir
         if not threads_dir.exists():
-            return 0
+            return []
 
         cutoff = time.time() - settings.thread_ttl_hours * 3600
-        removed = 0
+        expired: list[str] = []
         for entry in threads_dir.iterdir():
             if not entry.is_dir():
                 continue
             try:
-                mtime = entry.stat().st_mtime
-                if mtime < cutoff:
-                    shutil.rmtree(entry)
-                    removed += 1
-                    logger.info("Cleaned up expired thread workdir: %s", entry.name)
+                if entry.stat().st_mtime < cutoff:
+                    expired.append(entry.name)
             except OSError:
-                logger.warning("Failed to clean up thread workdir: %s", entry.name)
+                logger.warning("Failed to inspect thread workdir: %s", entry.name)
+        return expired
+
+    def cleanup_expired_threads(self) -> int:
+        """Remove thread workdirs older than thread_ttl_hours. Returns count removed."""
+        removed = 0
+        for thread_id in self.list_expired_threads():
+            try:
+                self.cleanup_thread(thread_id)
+                removed += 1
+                logger.info("Cleaned up expired thread workdir: %s", thread_id)
+            except OSError:
+                logger.warning("Failed to clean up thread workdir: %s", thread_id)
         return removed
 
     def cleanup_expired_uploads(self) -> int:

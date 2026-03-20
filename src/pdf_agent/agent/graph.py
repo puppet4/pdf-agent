@@ -230,7 +230,7 @@ def _should_continue(state: AgentState) -> str:
 # ---------------------------------------------------------------------------
 
 def build_graph(
-    checkpointer: AsyncPostgresSaver,
+    checkpointer: AsyncPostgresSaver | None,
     tool_registry: ToolRegistry,
 ) -> Any:  # CompiledStateGraph
     """Compile the LangGraph StateGraph with agent and tool nodes."""

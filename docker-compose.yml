@@ -8,7 +8,6 @@ services:
       - "8000:8000"
     environment:
       PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/pdf_agent
-      PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@db:5432/pdf_agent
       PDF_AGENT_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       PDF_AGENT_OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       PDF_AGENT_OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}

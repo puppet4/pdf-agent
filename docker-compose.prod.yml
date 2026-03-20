@@ -16,15 +16,13 @@ services:
       - "127.0.0.1:8000:8000"   # bind to localhost only; use a reverse proxy
     environment:
       PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@db:5432/pdf_agent
-      PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/pdf_agent
       PDF_AGENT_OPENAI_API_KEY: ${PDF_AGENT_OPENAI_API_KEY}
       PDF_AGENT_OPENAI_BASE_URL: ${PDF_AGENT_OPENAI_BASE_URL:-}
       PDF_AGENT_OPENAI_MODEL: ${PDF_AGENT_OPENAI_MODEL:-gpt-4o}
       PDF_AGENT_DATA_DIR: /app/data
       PDF_AGENT_DEBUG: "false"
-      # Auth
+      # Access control
       PDF_AGENT_API_KEY: ${PDF_AGENT_API_KEY:-}
-      PDF_AGENT_JWT_SECRET: ${PDF_AGENT_JWT_SECRET:-}
       # CORS — restrict to your domain(s)
       PDF_AGENT_CORS_ORIGINS: ${PDF_AGENT_CORS_ORIGINS:-https://yourdomain.com}
       # Rate limiting

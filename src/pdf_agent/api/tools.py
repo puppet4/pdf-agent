@@ -35,6 +35,20 @@ def _record_run(tool: str, status: str, log: str, output_files: list[dict]) -> N
     })
 
 
+def _resolve_tool_result_path(run_id: str, file_path: str) -> Path:
+    """Resolve a direct tool result path and prevent path traversal."""
+    if not run_id.startswith("direct_"):
+        raise HTTPException(status_code=400, detail="Invalid result path")
+
+    base_dir = (settings.threads_dir / run_id).resolve()
+    candidate = (base_dir / file_path).resolve()
+    try:
+        candidate.relative_to(base_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid result path") from exc
+    return candidate
+
+
 @router.get(
     "/history",
     summary="Tool run history",
@@ -207,19 +221,16 @@ async def run_tool(tool_name: str, req: ToolRunRequest):
 
 
 @router.get(
-    "/results/{run_id}/{filename}",
+    "/results/{run_id}/{file_path:path}",
     summary="Download direct tool result",
     include_in_schema=False,
 )
-async def download_tool_result(run_id: str, filename: str):
+async def download_tool_result(run_id: str, file_path: str):
     """Download a file produced by POST /api/tools/{name}/run."""
-    # run_id is always prefixed with 'direct_'
-    if not run_id.startswith("direct_"):
-        raise HTTPException(status_code=400, detail="Invalid result path")
-    path = settings.threads_dir / run_id / filename
+    path = _resolve_tool_result_path(run_id, file_path)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Result file not found")
-    return FileResponse(path, filename=filename)
+    return FileResponse(path, filename=path.name)
 
 
 # ---------------------------------------------------------------------------
@@ -246,17 +257,20 @@ async def download_zip(req: ZipRequest):
     added = 0
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for url in req.urls:
-            # URL format: /api/tools/results/{run_id}/{filename}
+            # URL format: /api/tools/results/{run_id}/{filename...}
             parts = url.strip("/").split("/")
             if len(parts) < 4 or parts[0] != "api" or parts[1] != "tools" or parts[2] != "results":
                 continue
             run_id = parts[3]
-            filename = parts[4] if len(parts) > 4 else ""
-            if not run_id.startswith("direct_") or not filename:
+            file_path = "/".join(parts[4:]) if len(parts) > 4 else ""
+            if not file_path:
                 continue
-            file_path = settings.threads_dir / run_id / filename
-            if file_path.is_file():
-                zf.write(file_path, arcname=filename)
+            try:
+                resolved = _resolve_tool_result_path(run_id, file_path)
+            except HTTPException:
+                continue
+            if resolved.is_file():
+                zf.write(resolved, arcname=resolved.name)
                 added += 1
 
     if added == 0:

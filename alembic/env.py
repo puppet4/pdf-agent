@@ -9,12 +9,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Override sqlalchemy.url from environment variable if set
-# PDF_AGENT_CHECKPOINTER_DB_URL uses sync psycopg2 driver (alembic needs sync)
-_db_url = (
-    os.environ.get("PDF_AGENT_CHECKPOINTER_DB_URL")
-    or os.environ.get("DATABASE_URL")
-)
+# Override sqlalchemy.url from environment variable if set.
+# Alembic needs a sync psycopg URL, so convert asyncpg URLs on the fly.
+_db_url = os.environ.get("PDF_AGENT_DATABASE_URL") or os.environ.get("DATABASE_URL")
 if _db_url:
     # Ensure it uses the sync psycopg2 driver (not asyncpg)
     _db_url = _db_url.replace("postgresql+asyncpg://", "postgresql://")

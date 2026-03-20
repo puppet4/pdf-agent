@@ -9,14 +9,11 @@ class Settings(BaseSettings):
     model_config = {"env_prefix": "PDF_AGENT_"}
 
     # --- App ---
-    app_name: str = "PDF Agent Toolbox"
+    app_name: str = "PDF Toolbox"
     debug: bool = False
 
     # --- Database (async for FastAPI) ---
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent"
-
-    # --- LangGraph Checkpointer (sync psycopg) ---
-    checkpointer_db_url: str = "postgresql://postgres:postgres@localhost:5432/pdf_agent"
 
     # --- OpenAI / LLM ---
     openai_api_key: str = ""
@@ -33,11 +30,8 @@ class Settings(BaseSettings):
     max_page_count: int = 2000
     external_cmd_timeout_sec: int = 1800  # 30 min
 
-    # --- Auth ---
+    # --- Access Control ---
     api_key: str = ""  # if set, require X-API-Key header for all API calls
-    jwt_secret: str = ""  # if set, enable JWT user authentication
-    jwt_algorithm: str = "HS256"
-    jwt_expire_hours: int = 24
 
     # --- CORS ---
     cors_origins: str = "*"  # comma-separated allowed origins

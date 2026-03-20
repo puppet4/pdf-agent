@@ -5,7 +5,7 @@ import io
 from pathlib import Path
 
 import pikepdf
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageChops
 
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
@@ -101,22 +101,18 @@ class CompareTool(BaseTool):
             diff = ImageChops.difference(img1, img2)
             threshold = params["sensitivity"]
 
-            # Create highlight mask
+            # Create highlight mask using PIL operations (fast, no pixel loop)
             diff_gray = diff.convert("L")
             mask = diff_gray.point(lambda p: 255 if p > threshold else 0)
 
-            # Apply highlight on img1
-            highlight = Image.new("RGBA", img1.size, (0, 0, 0, 0))
-            draw = ImageDraw.Draw(highlight)
-            # Fill highlighted regions
-            pixels = list(mask.getdata())
-            w, h = img1.size
-            for y in range(h):
-                for x in range(w):
-                    if pixels[y * w + x] > 0:
-                        draw.point((x, y), fill=highlight_rgba)
-
-            result = Image.alpha_composite(img1.convert("RGBA"), highlight).convert("RGB")
+            # Create highlight overlay and paste using mask
+            r, g, b, a = highlight_rgba
+            highlight_color = Image.new("RGBA", img1.size, (r, g, b, a))
+            base_rgba = img1.convert("RGBA")
+            # Expand mask to RGBA for paste
+            mask_rgba = mask.convert("L")
+            base_rgba.paste(highlight_color, mask=mask_rgba)
+            result = base_rgba.convert("RGB")
             diff_pages.append(result)
 
             if any(p > 0 for p in mask.getdata()):
