@@ -202,6 +202,19 @@ mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
 .empty-state h3{font-size:18px;color:var(--text);font-weight:600}
 .empty-state p{font-size:14px;text-align:center;max-width:360px;line-height:1.5}
 
+/* Batch run */
+.batch-bar{border-top:1px solid var(--border);padding:8px 10px;background:rgba(79,70,229,.04);display:none;align-items:center;gap:8px;font-size:12px;flex-shrink:0}
+.batch-bar.open{display:flex}
+.batch-bar .bb-count{flex:1;color:var(--text-secondary)}
+.batch-bar .btn-batch{background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:var(--radius-sm);font-size:12px;cursor:pointer;transition:background .15s}
+.batch-bar .btn-batch:hover{background:var(--accent-hover)}
+.batch-bar .btn-clear{background:none;border:1px solid var(--border);color:var(--text-secondary);padding:4px 10px;border-radius:var(--radius-sm);font-size:12px;cursor:pointer}
+.file-item .fi-check{width:16px;height:16px;accent-color:var(--accent);cursor:pointer;flex-shrink:0}
+/* Continue processing button on tool cards */
+.tc-continue{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+.tc-continue button{font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid var(--accent);color:var(--accent);background:none;cursor:pointer;transition:all .15s}
+.tc-continue button:hover{background:var(--accent);color:#fff}
+
 /* Responsive */
 @media(max-width:768px){
   .sidebar{position:absolute;left:-280px;z-index:10;height:100%;transition:left .2s}
@@ -245,6 +258,12 @@ mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
         <button class="btn-icon" onclick="loadFileManager()" title="Refresh">&#8635;</button>
       </div>
       <div class="file-manager" id="fileManager"><div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px">Loading files...</div></div>
+      <!-- Batch run bar -->
+      <div class="batch-bar" id="batchBar">
+        <span class="bb-count" id="batchCount">0 files selected</span>
+        <button class="btn-clear" onclick="clearBatchSelection()">Clear</button>
+        <button class="btn-batch" onclick="openBatchRun()">&#9889; Batch Run</button>
+      </div>
       <!-- Direct tool runner -->
       <div class="tool-runner" id="toolRunner">
         <h4>&#9889; Run Tool</h4>
@@ -419,7 +438,14 @@ async function sendMessage(){
         case'token':if(!streamBubble)streamBubble=addStreamingBubble();streamText+=d.content;streamBubble.innerHTML=renderMd(streamText);scrollBottom();break;
         case'tool_start':if(streamBubble&&streamText){streamBubble.innerHTML=renderMd(streamText);streamBubble.parentElement.dataset.text=streamText;chatHistory.push({role:'agent',content:streamText});streamBubble=null;streamText='';}activeCard=addToolCard(d.tool,d.args,'',[]  ,null,false);break;
         case'tool_progress':if(activeCard){const s=activeCard.querySelector('.tc-status');if(s){const pct=d.percent!=null?` ${d.percent}%`:'';const msg=d.message?` — ${d.message}`:'';s.textContent=`Running...${pct}${msg} ${d.elapsed_seconds||''}s`;}}break;
-        case'tool_end':if(activeCard){const p=activeCard.parentElement||$messages;const nc=document.createElement('div');nc.className='tool-card';const ae=activeCard.querySelector('.tc-args');const at=ae?ae.textContent:'';let fh='';if(d.files&&d.files.length)fh='<div class="tc-files">'+d.files.map(f=>`<a href="${f}" download>&#128196; ${f.split('/').pop()}</a>`).join('')+'</div>';const st=d.elapsed_seconds!=null?`Done (${d.elapsed_seconds}s)`:'Done';nc.innerHTML=`<div class="tc-header" onclick="this.parentElement.classList.toggle('expanded')"><div class="tc-icon">T</div><span class="tc-name">${esc(d.tool)}</span><span class="tc-status">${st}</span><span class="tc-chevron">&#9654;</span></div><div class="tc-body">${at?`<div class="tc-args-label">Args</div><div class="tc-args">${esc(at)}</div>`:''}${d.output?`<div class="tc-output-label">Output</div><div class="tc-output">${esc(d.output)}</div>`:''}${fh}</div>`;$messages.replaceChild(nc,activeCard);activeCard=null;chatHistory.push({role:'tool',name:d.tool,content:d.output});}break;
+        case'tool_end':if(activeCard){const p=activeCard.parentElement||$messages;const nc=document.createElement('div');nc.className='tool-card';const ae=activeCard.querySelector('.tc-args');const at=ae?ae.textContent:'';let fh='';if(d.files&&d.files.length)fh='<div class="tc-files">'+d.files.map(f=>`<a href="${f}" download>&#128196; ${f.split('/').pop()}</a>`).join('')+'</div>';const st=d.elapsed_seconds!=null?`Done (${d.elapsed_seconds}s)`:'Done';
+// Build "continue processing" quick actions
+let continueHtml='';
+if(d.files&&d.files.length){
+  const suggestions=['compress','ocr','watermark_text','rotate','metadata_info'];
+  continueHtml='<div class="tc-continue">'+suggestions.map(t=>`<button onclick="continueWithFile('${d.files[0]}','${t}')">${t}</button>`).join('')+'</div>';
+}
+nc.innerHTML=`<div class="tc-header" onclick="this.parentElement.classList.toggle('expanded')"><div class="tc-icon">T</div><span class="tc-name">${esc(d.tool)}</span><span class="tc-status">${st}</span><span class="tc-chevron">&#9654;</span></div><div class="tc-body">${at?`<div class="tc-args-label">Args</div><div class="tc-args">${esc(at)}</div>`:''}${d.output?`<div class="tc-output-label">Output</div><div class="tc-output">${esc(d.output)}</div>`:''}${fh}${continueHtml}</div>`;$messages.replaceChild(nc,activeCard);activeCard=null;chatHistory.push({role:'tool',name:d.tool,content:d.output});}break;
         case'error':addMessage('agent','Error: '+d.message);break;
         case'done':if(streamBubble&&streamText){streamBubble.innerHTML=renderMd(streamText);streamBubble.parentElement.dataset.text=streamText;chatHistory.push({role:'agent',content:streamText});}break;
       }
@@ -455,6 +481,83 @@ function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrol
 function toggleSidebar(){$('sidebar').classList.toggle('open');}
 function renderMd(t){if(!t)return'';let h=esc(t);h=h.replace(/```(\w*)\n([\s\S]*?)```/g,(_,l,c)=>`<pre><code>${c}</code></pre>`);h=h.replace(/`([^`]+)`/g,'<code>$1</code>');h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');h=h.replace(/\*(.+?)\*/g,'<em>$1</em>');h=h.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');h=h.replace(/\n\n+/g,'</p><p>');h=h.replace(/\n/g,'<br>');return'<p>'+h+'</p>';}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+
+// ---------------------------------------------------------------------------
+// Batch Run
+// ---------------------------------------------------------------------------
+let _batchSelected = new Set(); // file IDs
+
+function updateBatchBar() {
+  const bar = $('batchBar');
+  const count = _batchSelected.size;
+  $('batchCount').textContent = `${count} file${count !== 1 ? 's' : ''} selected`;
+  bar.classList.toggle('open', count > 0);
+}
+
+function toggleBatchFile(fileId, checked) {
+  if (checked) _batchSelected.add(fileId);
+  else _batchSelected.delete(fileId);
+  updateBatchBar();
+}
+
+function clearBatchSelection() {
+  _batchSelected.clear();
+  document.querySelectorAll('.fi-check').forEach(cb => { cb.checked = false; });
+  updateBatchBar();
+}
+
+async function openBatchRun() {
+  if (_batchSelected.size === 0) return;
+  const toolName = prompt('Enter tool name to run on all selected files (e.g. rotate, compress, ocr):');
+  if (!toolName || !toolName.trim()) return;
+  const tool = _allTools.find(t => t.name === toolName.trim());
+  if (!tool) { alert(`Tool "${toolName}" not found`); return; }
+
+  // Collect params via prompt for required params
+  const params = {};
+  if (tool.params) {
+    for (const p of tool.params) {
+      if (p.required) {
+        const val = prompt(`${p.label}${p.options ? ' (' + p.options.join('/') + ')' : ''}:`, p.default || '');
+        if (val === null) return;
+        params[p.name] = val || p.default || '';
+      } else if (p.default !== null && p.default !== undefined) {
+        params[p.name] = p.default;
+      }
+    }
+  }
+
+  const fileIds = [..._batchSelected];
+  const bar = $('batchBar');
+  bar.querySelector('.btn-batch').disabled = true;
+  bar.querySelector('.btn-batch').textContent = 'Running...';
+
+  // Switch to chat tab and show progress
+  switchTab('chat', document.querySelectorAll('.sidebar-tab')[0]);
+  addMessage('agent', `&#9889; Running **${toolName}** on ${fileIds.length} file(s)...`);
+
+  let success = 0, failed = 0;
+  for (const fid of fileIds) {
+    try {
+      const d = await api(`/api/tools/${toolName}/run`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ file_ids: [fid], params }),
+      });
+      success++;
+      const files = (d.output_files || []).map(f => `<a href="${f.download_url}" download style="color:var(--accent)">&#8681; ${esc(f.filename)}</a>`).join(' ');
+      addMessage('agent', `File ${fid.slice(0, 8)}: ${esc(d.log || 'Done')}${files ? '<br>' + files : ''}`);
+    } catch (e) {
+      failed++;
+      addMessage('agent', `File ${fid.slice(0, 8)}: Error — ${esc(e.message)}`);
+    }
+  }
+  addMessage('agent', `Batch complete: ${success} succeeded, ${failed} failed.`);
+
+  bar.querySelector('.btn-batch').disabled = false;
+  bar.querySelector('.btn-batch').textContent = '&#9889; Batch Run';
+  clearBatchSelection();
+}
 
 // ---------------------------------------------------------------------------
 // PDF Page Previewer
@@ -578,6 +681,20 @@ function onToolSelect() {
 function setPR(inputId, value) {
   const el = document.getElementById(inputId);
   if (el) el.value = value;
+}
+
+async function continueWithFile(downloadUrl, toolName) {
+  // Extract thread_id and step/filename from URL like /api/agent/threads/{id}/files/{step}/{file}
+  const parts = downloadUrl.split('/');
+  // URL: /api/agent/threads/TID/files/STEP/FILE
+  const tidIdx = parts.indexOf('threads');
+  const threadId = tidIdx >= 0 ? parts[tidIdx + 1] : null;
+
+  const msg = `Apply ${toolName} to the output file from the previous step.`;
+  $input.value = msg;
+  if (threadId) currentThreadId = threadId;
+  autoResize($input);
+  $input.focus();
 }
 
 function selectFileForTool(fileId, fileName) {
@@ -721,7 +838,9 @@ function renderFileManager() {
       : `<div class="fi-icon">&#128196;</div>`;
     const size = f.size_bytes > 1048576 ? (f.size_bytes/1048576).toFixed(1)+'MB' : (f.size_bytes/1024).toFixed(0)+'KB';
     const pages = f.page_count ? ` · ${f.page_count}p` : '';
-    el.innerHTML = `${thumb}
+    const checked = _batchSelected.has(f.id) ? 'checked' : '';
+    el.innerHTML = `<input type="checkbox" class="fi-check" ${checked} onchange="toggleBatchFile('${f.id}',this.checked)" title="Select for batch">
+      ${thumb}
       <div class="fi-info">
         <div class="fi-name" title="${esc(f.orig_name)}">${esc(f.orig_name)}</div>
         <div class="fi-meta">${size}${pages}</div>
