@@ -164,7 +164,11 @@ async def get_page_image(
     return FileResponse(page_cache, media_type="image/jpeg")
 
 
-
+@router.get(
+    "/{file_id}/thumbnail",
+    summary="Get PDF thumbnail",
+    description="Returns a JPG thumbnail of the first page of an uploaded PDF.",
+)
 async def get_thumbnail(
     file_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),

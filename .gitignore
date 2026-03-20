@@ -17,10 +17,7 @@ build/
 # Data (local storage — runtime files, do not commit)
 data/
 uploads/
-*.json
-!package.json
-!pyproject.toml
-!.env.example
+workflows.json
 
 # Environment
 .env
