@@ -299,6 +299,10 @@ mark{background:rgba(255,220,0,.4);border-radius:2px;padding:0 1px}
       <h4 id="previewerTitle">Pages</h4>
       <div class="page-strip" id="pageStrip"></div>
       <div class="page-range-hint" id="pageRangeHint"></div>
+      <div style="margin-top:6px;display:flex;gap:6px;align-items:center">
+        <button class="pr-chip" id="btnApplyReorder" style="display:none;border-color:var(--accent);color:var(--accent)" onclick="applyDragReorder()">&#8597; Apply reorder</button>
+        <button class="pr-chip" onclick="hidePagePreviewer()" style="margin-left:auto">&#215; Close</button>
+      </div>
     </div>
     <div class="messages" id="messages">
       <div class="empty-state" id="emptyState">
@@ -584,6 +588,7 @@ async function showPagePreviewer(fileId, fileName, pageCount) {
     thumb.dataset.page = i;
     thumb.onclick = () => togglePageSelection(thumb, i);
     thumb.innerHTML = `<img src="/api/files/${fileId}/pages/${i}" loading="lazy" onerror="this.style.display='none'"><div class="pg-num">${i}</div>`;
+    _makeDraggable(thumb);
     $strip.appendChild(thumb);
   }
   if (_previewPageCount > 12) {
@@ -627,6 +632,60 @@ function hidePagePreviewer() {
   _previewFileId = null;
   _previewPageCount = 0;
   _selectedPages.clear();
+  _dragOrder = [];
+  $('btnApplyReorder').style.display = 'none';
+}
+
+// ---------------------------------------------------------------------------
+// Drag-and-drop page reorder
+// ---------------------------------------------------------------------------
+let _dragOrder = []; // current page order after dragging
+let _dragSrc = null;
+
+function _makeDraggable(thumb) {
+  thumb.draggable = true;
+  thumb.addEventListener('dragstart', e => {
+    _dragSrc = thumb;
+    e.dataTransfer.effectAllowed = 'move';
+    thumb.style.opacity = '0.4';
+  });
+  thumb.addEventListener('dragend', () => { thumb.style.opacity = '1'; });
+  thumb.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+  thumb.addEventListener('drop', e => {
+    e.preventDefault();
+    if (_dragSrc === thumb) return;
+    const strip = $('pageStrip');
+    const thumbs = [...strip.querySelectorAll('.page-thumb')];
+    const srcIdx = thumbs.indexOf(_dragSrc);
+    const tgtIdx = thumbs.indexOf(thumb);
+    if (srcIdx < tgtIdx) strip.insertBefore(_dragSrc, thumb.nextSibling);
+    else strip.insertBefore(_dragSrc, thumb);
+    // Update order display
+    _dragOrder = [...strip.querySelectorAll('.page-thumb')].map(t => parseInt(t.dataset.page));
+    $('pageRangeHint').textContent = `New order: ${_dragOrder.join(', ')} — click "Apply reorder" to save`;
+    $('btnApplyReorder').style.display = '';
+  });
+}
+
+async function applyDragReorder() {
+  if (!_previewFileId || !_dragOrder.length) return;
+  $('btnApplyReorder').textContent = 'Applying...';
+  $('btnApplyReorder').disabled = true;
+  try {
+    const d = await api('/api/tools/reorder', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ file_id: _previewFileId, order: _dragOrder }),
+    });
+    const files = (d.output_files || []).map(f => `<a href="${f.download_url}" download style="color:var(--accent)">&#8681; ${esc(f.filename)}</a>`).join(' ');
+    addMessage('agent', `Pages reordered (${_dragOrder.join(', ')}). ${files}`);
+    hidePagePreviewer();
+    $emptyState.style.display = 'none';
+  } catch (e) {
+    $('pageRangeHint').textContent = 'Error: ' + e.message;
+  }
+  $('btnApplyReorder').textContent = '\u2195 Apply reorder';
+  $('btnApplyReorder').disabled = false;
 }
 
 // ---------------------------------------------------------------------------
