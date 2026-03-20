@@ -22,6 +22,7 @@ class FlattenTool(BaseTool):
             outputs=ToolOutputSpec(type="pdf"),
             params=[],
             engine="ghostscript",
+            async_hint=True,
         )
 
     def validate(self, params: dict) -> dict:
