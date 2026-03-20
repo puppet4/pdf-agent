@@ -49,9 +49,12 @@ def get_builtin_tools() -> list[BaseTool]:
     from pdf_agent.tools._builtins.barcode import BarcodeTool
     from pdf_agent.tools._builtins.linearize import LinearizeTool
     from pdf_agent.tools._builtins.page_border import PageBorderTool
+    from pdf_agent.tools._builtins.validate import ValidateTool
+    from pdf_agent.tools._builtins.auto_rotate import AutoRotateTool
+    from pdf_agent.tools._builtins.pages_to_zip import PagesToZipTool
 
     return [
-        MergeTool(), SplitTool(), RotateTool(),
+        MergeTool(), SplitTool(), RotateTool(), AutoRotateTool(),
         MetadataInfoTool(), SetMetadataTool(), RemoveMetadataTool(),
         ExtractTool(), DeleteTool(), ReorderTool(), ReversePagesTool(),
         EncryptTool(), DecryptTool(),
@@ -59,9 +62,10 @@ def get_builtin_tools() -> list[BaseTool]:
         HeaderFooterTool(), AddPageNumbersTool(), ImagesToPdfTool(),
         BarcodeTool(), PageBorderTool(),
         CompressTool(), RepairTool(), LinearizeTool(), OcrTool(),
-        PdfToImagesTool(), PdfToWordTool(), PdfToExcelTool(), PdfToPptTool(),
+        PdfToImagesTool(), PagesToZipTool(), PdfToWordTool(), PdfToExcelTool(), PdfToPptTool(),
         PdfToTextTool(), PdfToHtmlTool(), PdfToMarkdownTool(), PdfATool(),
         CropTool(), ResizeTool(), FlattenTool(),
         RemoveBlankPagesTool(), NUpTool(), QrCodeTool(), CompareTool(), TilePagesTool(),
         FormFillTool(), SignatureInfoTool(), SignatureTool(), DeskewTool(),
+        ValidateTool(),
     ]
