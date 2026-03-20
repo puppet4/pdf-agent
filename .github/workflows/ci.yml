@@ -79,7 +79,7 @@ jobs:
 
           # Health + tools count
           curl -sf http://127.0.0.1:8765/healthz | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['database']=='ok', f'DB check failed: {d}'"
-          curl -sf http://127.0.0.1:8765/api/tools | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d['tools'])>=41, f'Expected 41+ tools, got {len(d[\"tools\"])}'"
+          curl -sf http://127.0.0.1:8765/api/tools | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d['tools'])>=44, f'Expected 44+ tools, got {len(d[\"tools\"])}'"
           curl -sf http://127.0.0.1:8765/api/workflows | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d['workflows'])>=5, 'Expected 5+ workflows'"
           curl -sf http://127.0.0.1:8765/metrics | grep -q pdf_agent_http
 
