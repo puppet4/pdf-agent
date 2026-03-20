@@ -1,8 +1,10 @@
-"""Tools API - list tools, get manifests, and direct tool invocation."""
+"""Tools API - list tools, get manifests, direct tool invocation, and run history."""
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,32 @@ from pdf_agent.config import settings
 from pdf_agent.tools.registry import registry
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
+
+# ---------------------------------------------------------------------------
+# In-memory run history (last 100 runs)
+# ---------------------------------------------------------------------------
+
+_run_history: deque = deque(maxlen=100)
+
+
+def _record_run(tool: str, status: str, log: str, output_files: list[dict]) -> None:
+    _run_history.appendleft({
+        "id": uuid.uuid4().hex[:8],
+        "tool": tool,
+        "status": status,
+        "log": log[:200],
+        "output_files": output_files,
+        "timestamp": time.time(),
+    })
+
+
+@router.get(
+    "/history",
+    summary="Tool run history",
+    description="Returns the last 100 direct tool invocations.",
+)
+async def get_run_history():
+    return {"history": list(_run_history)}
 
 
 @router.get(
@@ -172,6 +200,9 @@ async def run_tool(tool_name: str, req: ToolRunRequest):
             "log": tool_result.log,
         })
 
+    # Record in history
+    _record_run(tool_name, "success", tool_result.log, output_files)
+
     return response
 
 
@@ -189,3 +220,74 @@ async def download_tool_result(run_id: str, filename: str):
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Result file not found")
     return FileResponse(path, filename=filename)
+
+
+# ---------------------------------------------------------------------------
+# Drag-and-drop page reorder
+# ---------------------------------------------------------------------------
+
+class ReorderRequest(BaseModel):
+    """
+    Reorder pages via drag-and-drop.
+
+    - **file_id**: ID of uploaded PDF
+    - **order**: New page order as list of 1-based page numbers, e.g. [3,1,2]
+    """
+    file_id: str
+    order: list[int]
+
+
+@router.post(
+    "/reorder",
+    summary="Reorder PDF pages (drag-and-drop)",
+    description="Reorder pages of an uploaded PDF by providing the desired page order as a list.",
+)
+async def reorder_pages(req: ReorderRequest):
+    """Reorder pages — convenient alternative to POST /api/tools/reorder/run."""
+    if not req.order:
+        raise HTTPException(status_code=422, detail="order must not be empty")
+
+    # Resolve file
+    from sqlalchemy import select
+    from pdf_agent.db import async_session_factory
+    from pdf_agent.db.models import FileRecord
+
+    async with async_session_factory() as session:
+        try:
+            uid = uuid.UUID(req.file_id)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid file_id")
+        result = await session.execute(select(FileRecord).where(FileRecord.id == uid))
+        record = result.scalar_one_or_none()
+        if not record:
+            raise HTTPException(status_code=404, detail="File not found")
+        input_path = Path(record.storage_path)
+        if not input_path.exists():
+            raise HTTPException(status_code=404, detail="File not on disk")
+
+    # Execute reorder tool
+    reorder_tool = registry.get("reorder")
+    if not reorder_tool:
+        raise HTTPException(status_code=500, detail="reorder tool not loaded")
+
+    run_id = str(uuid.uuid4())[:8]
+    workdir = settings.threads_dir / f"direct_{run_id}"
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        order_str = ",".join(str(p) for p in req.order)
+        tool_result = reorder_tool.run(
+            inputs=[input_path],
+            params={"order": order_str},
+            workdir=workdir,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    output_files = []
+    for f in tool_result.output_files:
+        url = f"/api/tools/results/direct_{run_id}/{f.name}"
+        output_files.append({"filename": f.name, "download_url": url, "size_bytes": f.stat().st_size})
+
+    _record_run("reorder", "success", tool_result.log, output_files)
+    return {"status": "success", "log": tool_result.log, "output_files": output_files}
