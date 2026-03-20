@@ -48,7 +48,6 @@ def app():
     if len(registry) == 0:
         load_builtin_tools()
 
-    from unittest.mock import AsyncMock
     _app.state.graph = AsyncMock()
     return _app
 
