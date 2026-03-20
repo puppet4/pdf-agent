@@ -112,10 +112,59 @@ async def download_file(
 
 
 @router.get(
-    "/{file_id}/thumbnail",
-    summary="Get PDF thumbnail",
-    description="Returns a JPG thumbnail of the first page of an uploaded PDF.",
+    "/{file_id}/pages/{page}",
+    summary="Get a specific PDF page as image",
+    description="Returns a JPG image of the specified page (1-indexed) of an uploaded PDF.",
 )
+async def get_page_image(
+    file_id: uuid.UUID,
+    page: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """Render a specific PDF page as a JPG thumbnail."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    svc = FileService(session)
+    record = await svc.get(file_id)
+
+    if record.mime_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files support page preview")
+
+    if record.page_count and (page < 1 or page > record.page_count):
+        raise HTTPException(status_code=400, detail=f"Page {page} out of range (1-{record.page_count})")
+
+    pdf_path = Path(record.storage_path)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    # Check cache: page images stored alongside the file
+    page_cache = pdf_path.parent / f"page_{page}.jpg"
+    if page_cache.exists():
+        return FileResponse(page_cache, media_type="image/jpeg")
+
+    pdftoppm = shutil.which("pdftoppm")
+    if not pdftoppm:
+        raise HTTPException(status_code=503, detail="pdftoppm not installed")
+
+    with tempfile.TemporaryDirectory() as td:
+        out_stem = Path(td) / "page"
+        subprocess.run(
+            [pdftoppm, "-r", "96", "-jpeg", "-f", str(page), "-l", str(page),
+             "-scale-to", "400", str(pdf_path), str(out_stem)],
+            capture_output=True, timeout=30,
+        )
+        candidates = list(Path(td).glob("*.jpg"))
+        if not candidates:
+            raise HTTPException(status_code=500, detail="Failed to render page")
+        import shutil as _shutil
+        _shutil.copy(candidates[0], page_cache)
+
+    return FileResponse(page_cache, media_type="image/jpeg")
+
+
+
 async def get_thumbnail(
     file_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
