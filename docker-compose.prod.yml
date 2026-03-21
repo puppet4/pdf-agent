@@ -11,11 +11,13 @@ services:
       sh -c "alembic upgrade head &&
              uvicorn pdf_agent.main:app
              --host 0.0.0.0 --port 8000
-             --workers 2 --log-level warning --access-log"
+             --workers 1 --log-level warning --access-log"
     ports:
       - "127.0.0.1:8000:8000"   # bind to localhost only; use a reverse proxy
     environment:
       PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@db:5432/pdf_agent
+      PDF_AGENT_REDIS_URL: redis://redis:6379/0
+      PDF_AGENT_CELERY_ENABLED: "true"
       PDF_AGENT_OPENAI_API_KEY: ${PDF_AGENT_OPENAI_API_KEY}
       PDF_AGENT_OPENAI_BASE_URL: ${PDF_AGENT_OPENAI_BASE_URL:-}
       PDF_AGENT_OPENAI_MODEL: ${PDF_AGENT_OPENAI_MODEL:-gpt-4o}
@@ -38,13 +40,40 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
     user: pdfagent
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz | grep -q '\"status\":\"ok\"'"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    command: celery -A pdf_agent.worker.celery_app worker -Q pdf_executions_light,pdf_executions_heavy --loglevel=warning
+    environment:
+      PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@db:5432/pdf_agent
+      PDF_AGENT_REDIS_URL: redis://redis:6379/0
+      PDF_AGENT_CELERY_ENABLED: "true"
+      PDF_AGENT_DATA_DIR: /app/data
+      PDF_AGENT_DEBUG: "false"
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    user: pdfagent
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
 
   db:
     image: postgres:16-alpine
