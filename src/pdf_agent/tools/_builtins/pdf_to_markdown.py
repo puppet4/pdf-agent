@@ -41,6 +41,7 @@ class PdfToMarkdownTool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "pdfminer.six not installed. Run: pip install pdfminer.six")
 
         params = self.validate(params)
+        workdir.mkdir(parents=True, exist_ok=True)
         output_path = workdir / "output.md"
 
         if reporter:
@@ -58,7 +59,12 @@ class PdfToMarkdownTool(BaseTool):
                     if isinstance(element, LTTextContainer):
                         text = element.get_text().strip()
                         if text:
-                            lines.append(text + "\n")
+                            if params["preserve_layout"]:
+                                lines.append(text + "\n")
+                            else:
+                                compact = " ".join(part.strip() for part in text.splitlines() if part.strip())
+                                if compact:
+                                    lines.append(compact + "\n")
         except Exception as e:
             raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"Text extraction failed: {e}")
 

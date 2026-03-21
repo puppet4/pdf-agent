@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from pdf_agent.config import settings
 from pdf_agent.db import async_session_factory
+from pdf_agent.execution_queue import get_worker_state
 
 router = APIRouter(tags=["health"])
 
@@ -20,8 +21,8 @@ async def healthz(request: Request):
         async with async_session_factory() as session:
             await session.execute(text("SELECT 1"))
         checks["database"] = "ok"
-    except Exception as exc:
-        checks["database"] = f"error: {exc}"
+    except Exception:
+        checks["database"] = "error"
         checks["status"] = "degraded"
 
     # LLM configuration
@@ -39,7 +40,7 @@ async def healthz(request: Request):
     # Tool count
     from pdf_agent.tools.registry import registry
     checks["tools_loaded"] = len(registry)
+    checks.update(get_worker_state())
 
-    # Always return 200 so load balancers don't remove the instance;
-    # callers should inspect the 'status' field for degraded state.
-    return JSONResponse(content=checks, status_code=200)
+    status_code = 200 if checks["status"] == "ok" else 503
+    return JSONResponse(content=checks, status_code=status_code)

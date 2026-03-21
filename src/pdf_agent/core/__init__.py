@@ -16,6 +16,7 @@ class ErrorCode:
     JOB_NOT_FOUND = "JOB_NOT_FOUND"
     FILE_TOO_LARGE = "FILE_TOO_LARGE"
     PAGE_COUNT_EXCEEDED = "PAGE_COUNT_EXCEEDED"
+    STORAGE_LIMIT_EXCEEDED = "STORAGE_LIMIT_EXCEEDED"
 
 
 # Localized error message templates keyed by error code
@@ -32,6 +33,7 @@ _ERROR_MESSAGES: dict[str, dict[str, str]] = {
         ErrorCode.FILE_NOT_FOUND: "File not found",
         ErrorCode.FILE_TOO_LARGE: "File exceeds size limit",
         ErrorCode.PAGE_COUNT_EXCEEDED: "Page count exceeds limit",
+        ErrorCode.STORAGE_LIMIT_EXCEEDED: "Storage limit exceeded",
     },
     "zh": {
         ErrorCode.INVALID_INPUT_FILE: "无效的输入文件",
@@ -45,6 +47,7 @@ _ERROR_MESSAGES: dict[str, dict[str, str]] = {
         ErrorCode.FILE_NOT_FOUND: "文件不存在",
         ErrorCode.FILE_TOO_LARGE: "文件超过大小限制",
         ErrorCode.PAGE_COUNT_EXCEEDED: "页数超过限制",
+        ErrorCode.STORAGE_LIMIT_EXCEEDED: "存储空间不足",
     },
 }
 

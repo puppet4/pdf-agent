@@ -14,9 +14,9 @@ from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 def _is_blank(page: pikepdf.Page, threshold: float = 0.99) -> bool:
     """Check if a page is blank by rendering a tiny thumbnail and checking whiteness."""
     try:
-        import subprocess
         import shutil
         import tempfile
+        from pdf_agent.external_commands import run_command
         gs = shutil.which("gs")
         if not gs:
             return False
@@ -27,11 +27,14 @@ def _is_blank(page: pikepdf.Page, threshold: float = 0.99) -> bool:
                 tmp.pages.append(page)
                 tmp_pdf = Path(td) / "tmp.pdf"
                 tmp.save(tmp_pdf)
-            subprocess.run(
+            result = run_command(
                 [gs, "-sDEVICE=pngmono", "-r20", "-dNOPAUSE", "-dBATCH", "-dQUIET",
                  f"-sOutputFile={out}", str(tmp_pdf)],
-                capture_output=True, timeout=10,
+                check=False,
+                timeout=10,
             )
+            if result.returncode != 0:
+                return False
             if not out.exists():
                 return False
             img = Image.open(out).convert("L")

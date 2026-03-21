@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -10,6 +9,7 @@ import pikepdf
 
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.core.page_range import parse_page_range
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
@@ -20,11 +20,15 @@ def _detect_skew(image_path: Path) -> float | None:
     if not tesseract:
         return None
     try:
-        result = subprocess.run(
+        result = run_command(
             [tesseract, str(image_path), "stdout", "--psm", "0", "-l", "osd"],
-            capture_output=True, timeout=30, text=True,
+            check=False,
+            timeout=30,
         )
-        for line in result.stdout.splitlines():
+        if result.returncode != 0:
+            return None
+        stdout = result.stdout.decode("utf-8", errors="replace")
+        for line in stdout.splitlines():
             if "Rotate:" in line:
                 angle = float(line.split(":")[1].strip())
                 return angle
@@ -39,11 +43,14 @@ def _render_page_to_image(pdf_path: Path, page_idx: int, tmpdir: Path, dpi: int 
     if not pdftoppm:
         return None
     out_stem = tmpdir / f"page_{page_idx}"
-    subprocess.run(
+    result = run_command(
         [pdftoppm, "-r", str(dpi), "-png", "-f", str(page_idx + 1), "-l", str(page_idx + 1),
          str(pdf_path), str(out_stem)],
-        capture_output=True, timeout=30,
+        check=False,
+        timeout=30,
     )
+    if result.returncode != 0:
+        return None
     candidates = list(tmpdir.glob(f"page_{page_idx}*.png"))
     return candidates[0] if candidates else None
 

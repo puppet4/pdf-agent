@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import io
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -12,6 +11,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from pdf_agent.core import ErrorCode, ToolError
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
@@ -21,10 +21,13 @@ def _render_first_page_png(pdf_path: Path, tmpdir: Path, dpi: int = 96) -> Path 
     if not pdftoppm:
         return None
     out_stem = tmpdir / pdf_path.stem
-    subprocess.run(
+    result = run_command(
         [pdftoppm, "-r", str(dpi), "-png", "-f", "1", "-l", "1", str(pdf_path), str(out_stem)],
-        capture_output=True, timeout=30,
+        check=False,
+        timeout=30,
     )
+    if result.returncode != 0:
+        return None
     candidates = list(tmpdir.glob(f"{pdf_path.stem}*.png"))
     return candidates[0] if candidates else None
 

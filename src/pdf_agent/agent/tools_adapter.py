@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
+from dataclasses import dataclass, field
 import json
 import logging
 import queue
+import re
 import threading
+import time
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -14,12 +16,18 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
 from pdf_agent.agent.state import AgentState
+from pdf_agent.api.metrics import metrics
 from pdf_agent.config import settings
+from pdf_agent.core import ErrorCode, PDFAgentError
+from pdf_agent.external_commands import bind_execution_context
 from pdf_agent.schemas.tool import ParamSpec, ToolManifest
 from pdf_agent.tools.base import BaseTool
 from pdf_agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+_RESULT_JSON_PREFIX = "Result JSON:"
+_ERROR_RESULT_RE = re.compile(r"^Error:\s*(?:\[(?P<code>[A-Z_]+)\]\s*)?(?P<message>.+)$")
 
 # ---------------------------------------------------------------------------
 # Concurrency limiter for CPU-intensive async tools
@@ -34,38 +42,6 @@ def _get_semaphore() -> asyncio.Semaphore:
     if _ASYNC_SEMAPHORE is None:
         _ASYNC_SEMAPHORE = asyncio.Semaphore(_MAX_CONCURRENT_ASYNC)
     return _ASYNC_SEMAPHORE
-
-# ---------------------------------------------------------------------------
-# Result cache — keyed by (tool_name, sha256(inputs), params_hash)
-# ---------------------------------------------------------------------------
-
-_result_cache: dict[str, str] = {}  # cache_key -> result string
-_cache_lock = threading.Lock()
-_MAX_CACHE = 256
-
-
-def _cache_key(tool_name: str, input_paths: list[Path], params: dict) -> str:
-    h = hashlib.sha256()
-    h.update(tool_name.encode())
-    for p in sorted(input_paths):
-        if p.exists():
-            h.update(p.read_bytes())
-    h.update(json.dumps(params, sort_keys=True).encode())
-    return h.hexdigest()
-
-
-def _get_cached(key: str) -> str | None:
-    with _cache_lock:
-        return _result_cache.get(key)
-
-
-def _set_cached(key: str, value: str) -> None:
-    with _cache_lock:
-        if len(_result_cache) >= _MAX_CACHE:
-            # Evict oldest (first inserted)
-            oldest = next(iter(_result_cache))
-            del _result_cache[oldest]
-        _result_cache[key] = value
 
 # ---------------------------------------------------------------------------
 # ParamSpec → Pydantic field mapping
@@ -130,6 +106,18 @@ def _build_args_schema(manifest: ToolManifest) -> type[BaseModel]:
     return model
 
 
+def _allowed_state_paths(state: AgentState) -> set[Path]:
+    """Return the normalized set of file paths already attached to the agent state."""
+    allowed: set[Path] = set()
+    for item in state.get("files", []):
+        path = item.get("path") if isinstance(item, dict) else None
+        if path:
+            allowed.add(Path(path).resolve())
+    for path in state.get("current_files", []):
+        allowed.add(Path(path).resolve())
+    return allowed
+
+
 # ---------------------------------------------------------------------------
 # SSE progress queue — keyed by thread_id
 # ---------------------------------------------------------------------------
@@ -152,8 +140,155 @@ def release_progress_queue(thread_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Structured execution result
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AdaptedToolExecutionResult:
+    log: str = ""
+    meta: dict[str, Any] = field(default_factory=dict)
+    output_files: list[str] = field(default_factory=list)
+    raw_output: str = ""
+
+
+def parse_tool_result_payload(result_str: str) -> AdaptedToolExecutionResult:
+    """Parse the formatted StructuredTool response back into structured data."""
+    for line in result_str.splitlines():
+        if line.startswith(_RESULT_JSON_PREFIX):
+            raw = line[len(_RESULT_JSON_PREFIX):].strip()
+            payload = json.loads(raw)
+            return AdaptedToolExecutionResult(
+                log=str(payload.get("log", "") or ""),
+                meta=payload.get("meta", {}) if isinstance(payload.get("meta"), dict) else {},
+                output_files=[
+                    str(path)
+                    for path in payload.get("output_files", [])
+                    if isinstance(path, str) and path
+                ],
+                raw_output=result_str,
+            )
+    return AdaptedToolExecutionResult(log=result_str.strip(), raw_output=result_str)
+
+
+def _raise_for_error_output(result_str: str) -> None:
+    match = _ERROR_RESULT_RE.match(result_str.strip())
+    if not match:
+        return
+    code = match.group("code") or ErrorCode.ENGINE_EXEC_FAILED
+    raise PDFAgentError(code=code, message=match.group("message").strip())
+
+
+def _state_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
+    return [
+        {
+            "file_id": str(index),
+            "path": str(path.resolve()),
+            "orig_name": path.name,
+            "mime_type": "",
+            "page_count": None,
+            "source": "execution",
+        }
+        for index, path in enumerate(paths, start=1)
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Wrapper that bridges LangChain tool call → BaseTool.run()
 # ---------------------------------------------------------------------------
+
+async def _execute_tool_with_state(
+    *,
+    tool: BaseTool,
+    manifest: ToolManifest,
+    state: AgentState | dict[str, Any],
+    kwargs: dict[str, Any],
+    progress_reporter=None,
+):
+    """Execute one tool against an agent-like state with shared validation."""
+    explicit_paths = kwargs.pop("input_file_paths", None)
+    if explicit_paths:
+        allowed_paths = _allowed_state_paths(state)
+        input_paths = [Path(p).resolve() for p in explicit_paths]
+        if not set(input_paths).issubset(allowed_paths):
+            raise PDFAgentError(
+                code=ErrorCode.INVALID_INPUT_FILE,
+                message="explicit input_file_paths must stay within the active file set",
+            )
+    else:
+        input_paths = [Path(p).resolve() for p in state.get("current_files", [])]
+
+    if len(input_paths) < manifest.inputs.min:
+        raise PDFAgentError(
+            code=ErrorCode.INVALID_INPUT_FILE,
+            message=f"{manifest.name} requires at least {manifest.inputs.min} input file(s), got {len(input_paths)}",
+        )
+    if len(input_paths) > manifest.inputs.max:
+        input_paths = input_paths[: manifest.inputs.max]
+
+    step = state.get("step_counter", 0)
+    thread_workdir = Path(state.get("thread_workdir", "/tmp"))
+    step_dir = thread_workdir / f"step_{step}"
+    step_dir.mkdir(parents=True, exist_ok=True)
+
+    params: dict[str, Any] = {}
+    for p in manifest.params:
+        if p.name in kwargs and kwargs[p.name] is not None:
+            params[p.name] = kwargs[p.name]
+        elif p.default is not None:
+            params[p.name] = p.default
+    validated_params = tool.validate(params)
+
+    thread_id = state.get("configurable", {}).get("thread_id", "") if isinstance(state, dict) else ""
+    prog_queue: queue.Queue | None = get_progress_queue(thread_id) if thread_id else None
+
+    def reporter(percent: int, message: str = "") -> None:
+        if prog_queue:
+            try:
+                prog_queue.put_nowait({"percent": percent, "message": message})
+            except queue.Full:
+                pass
+        if progress_reporter:
+            progress_reporter(percent, message)
+
+    start = time.perf_counter()
+    try:
+        with bind_execution_context(thread_id or None):
+            if manifest.async_hint:
+                async with _get_semaphore():
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            tool.run,
+                            inputs=input_paths,
+                            params=validated_params,
+                            workdir=step_dir,
+                            reporter=reporter,
+                        ),
+                        timeout=settings.external_cmd_timeout_sec,
+                    )
+            else:
+                result = tool.run(
+                    inputs=input_paths,
+                    params=validated_params,
+                    workdir=step_dir,
+                    reporter=reporter,
+                )
+    except asyncio.TimeoutError as exc:
+        raise PDFAgentError(
+            code=ErrorCode.ENGINE_EXEC_TIMEOUT,
+            message=f"{manifest.name} timed out after {settings.external_cmd_timeout_sec}s",
+        ) from exc
+    except PDFAgentError:
+        raise
+    except Exception as exc:
+        logger.exception("Tool %s failed", manifest.name)
+        raise PDFAgentError(
+            code=ErrorCode.ENGINE_EXEC_FAILED,
+            message=f"{manifest.name} failed: {exc}",
+        ) from exc
+
+    metrics.record_tool(manifest.name, time.perf_counter() - start)
+    return result
+
 
 def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
     """Create the callable that runs when the LLM invokes this tool.
@@ -168,99 +303,36 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
     async def async_wrapper(**kwargs: Any) -> str:
         state: AgentState = kwargs.pop("state", {})
         kwargs.pop("tool_call_id", None)
-
-        # --- Resolve input files ---
-        explicit_paths = kwargs.pop("input_file_paths", None)
-        if explicit_paths:
-            input_paths = [Path(p) for p in explicit_paths]
-        else:
-            input_paths = [Path(p) for p in state.get("current_files", [])]
-
-        # Validate input count
-        if len(input_paths) < manifest.inputs.min:
-            return f"Error: {manifest.name} requires at least {manifest.inputs.min} input file(s), got {len(input_paths)}."
-        if len(input_paths) > manifest.inputs.max:
-            input_paths = input_paths[: manifest.inputs.max]
-
-        # --- Create step workdir ---
-        step = state.get("step_counter", 0)
-        thread_workdir = Path(state.get("thread_workdir", "/tmp"))
-        step_dir = thread_workdir / f"step_{step}"
-        step_dir.mkdir(parents=True, exist_ok=True)
-
-        # --- Build params dict (remaining kwargs) ---
-        params: dict[str, Any] = {}
-        for p in manifest.params:
-            if p.name in kwargs and kwargs[p.name] is not None:
-                params[p.name] = kwargs[p.name]
-            elif p.default is not None:
-                params[p.name] = p.default
-
-        # --- Build progress reporter that pushes to SSE queue ---
-        thread_id = state.get("configurable", {}).get("thread_id", "") if isinstance(state, dict) else ""
-        prog_queue: queue.Queue | None = None
-        if thread_id:
-            prog_queue = get_progress_queue(thread_id)
-
-        def reporter(percent: int, message: str = "") -> None:
-            if prog_queue:
-                try:
-                    prog_queue.put_nowait({"percent": percent, "message": message})
-                except queue.Full:
-                    pass
-
-        # --- Execute tool (async_hint=True → offload to thread pool with timeout) ---
-        # Check cache for cacheable (non-async_hint) tools
-        cache_key = None
-        if not manifest.async_hint:
-            cache_key = _cache_key(manifest.name, input_paths, params)
-            cached = _get_cached(cache_key)
-            if cached is not None:
-                logger.debug("Cache hit for %s", manifest.name)
-                return cached
-
+        progress_reporter = kwargs.pop("progress_reporter", None)
         try:
-            if manifest.async_hint:
-                async with _get_semaphore():
-                    result = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            tool.run,
-                            inputs=input_paths,
-                            params=params,
-                            workdir=step_dir,
-                            reporter=reporter,
-                        ),
-                        timeout=settings.external_cmd_timeout_sec,
-                    )
-            else:
-                result = tool.run(
-                    inputs=input_paths,
-                    params=params,
-                    workdir=step_dir,
-                    reporter=reporter,
-                )
-        except asyncio.TimeoutError:
-            return f"Error: {manifest.name} timed out after {settings.external_cmd_timeout_sec}s"
-        except Exception as e:
-            logger.exception("Tool %s failed", manifest.name)
-            return f"Error executing {manifest.name}: {e}"
+            result = await _execute_tool_with_state(
+                tool=tool,
+                manifest=manifest,
+                state=state,
+                kwargs=kwargs,
+                progress_reporter=progress_reporter,
+            )
+        except PDFAgentError as exc:
+            return f"Error: [{exc.code}] {exc.message}"
+        except Exception as exc:
+            logger.exception("Tool %s failed unexpectedly", manifest.name)
+            return f"Error: [{ErrorCode.ENGINE_EXEC_FAILED}] {exc}"
 
         # --- Format result ---
         output_files = [str(f) for f in result.output_files]
+        payload = {
+            "log": result.log,
+            "meta": result.meta,
+            "output_files": output_files,
+        }
         parts = []
         if result.log:
             parts.append(result.log)
         if result.meta:
             parts.append(f"Metadata: {json.dumps(result.meta, ensure_ascii=False, default=str)}")
-        if output_files:
-            parts.append(f"Output files: {output_files}")
+        parts.append(f"Result JSON: {json.dumps(payload, ensure_ascii=False, default=str)}")
 
         result_str = "\n".join(parts) if parts else "Done (no output)."
-
-        # Store in cache for non-async tools
-        if cache_key is not None:
-            _set_cached(cache_key, result_str)
-
         return result_str
 
     return async_wrapper
@@ -289,3 +361,52 @@ def adapt_all_tools(registry: ToolRegistry) -> list[StructuredTool]:
 
     logger.info("Adapted %d tools for LangGraph", len(tools))
     return tools
+
+
+_ADAPTED_TOOL_MAP_CACHE: dict[ToolRegistry, tuple[int, dict[str, StructuredTool]]] = {}
+
+
+def get_adapted_tool_map(registry: ToolRegistry) -> dict[str, StructuredTool]:
+    """Return a cached name -> StructuredTool map for the current registry snapshot."""
+    cached = _ADAPTED_TOOL_MAP_CACHE.get(registry)
+    if cached is None or cached[0] != len(registry):
+        tool_map = {tool.name: tool for tool in adapt_all_tools(registry)}
+        _ADAPTED_TOOL_MAP_CACHE[registry] = (len(registry), tool_map)
+        return tool_map
+    return cached[1]
+
+
+async def invoke_adapted_tool(
+    *,
+    registry: ToolRegistry,
+    tool_name: str,
+    input_paths: list[Path],
+    params: dict[str, Any],
+    thread_workdir: Path,
+    step_counter: int,
+    thread_id: str,
+    progress_reporter=None,
+) -> AdaptedToolExecutionResult:
+    """Execute a tool through the LangChain StructuredTool adapter path."""
+    tool_map = get_adapted_tool_map(registry)
+    lc_tool = tool_map.get(tool_name)
+    if lc_tool is None:
+        raise PDFAgentError(code=ErrorCode.INVALID_PARAMS, message=f"Unknown tool: {tool_name}")
+
+    resolved_paths = [path.resolve() for path in input_paths]
+    state = {
+        "files": _state_file_entries(resolved_paths),
+        "current_files": [str(path) for path in resolved_paths],
+        "thread_workdir": str(thread_workdir),
+        "step_counter": step_counter,
+        "configurable": {"thread_id": thread_id},
+    }
+    result_str = await lc_tool.coroutine(
+        state=state,
+        tool_call_id=f"execution:{thread_id}:{step_counter}:{tool_name}",
+        input_file_paths=[str(path) for path in resolved_paths],
+        progress_reporter=progress_reporter,
+        **(params or {}),
+    )
+    _raise_for_error_output(result_str)
+    return parse_tool_result_payload(result_str)

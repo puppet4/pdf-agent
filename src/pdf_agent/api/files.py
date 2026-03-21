@@ -1,23 +1,68 @@
 """Files API - upload, list, download files."""
 from __future__ import annotations
 
+import logging
+import mimetypes
 import shutil
-import subprocess
 import tempfile
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pdf_agent.config import settings
+from pdf_agent.core import ErrorCode, PDFAgentError
 from pdf_agent.db import get_session
 from pdf_agent.db.models import FileRecord
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.file import FileUploadResponse
 from pdf_agent.services import FileService
 
 router = APIRouter(prefix="/api/files", tags=["files"])
+logger = logging.getLogger(__name__)
+
+
+def _normalize_upload_content_type(filename: str, content_type: str | None) -> str:
+    """Prefer the browser MIME type, but recover known types from filename when generic."""
+    normalized = (content_type or "").strip().lower()
+    if normalized and normalized != "application/octet-stream":
+        return normalized
+    guessed, _ = mimetypes.guess_type(filename)
+    return guessed or "application/octet-stream"
+
+
+async def _read_upload_content(file: UploadFile) -> bytes:
+    raise RuntimeError("_read_upload_content has been replaced by _spill_upload_to_tempfile")
+
+
+async def _spill_upload_to_tempfile(file: UploadFile, tmp_path: Path | None = None) -> Path:
+    """Stream uploads to a temporary file so under-limit files are not buffered in memory."""
+    max_bytes = settings.max_upload_size_mb * 1024 * 1024
+    temp_root = tmp_path or (settings.data_dir / "tmp_uploads")
+    temp_root.mkdir(parents=True, exist_ok=True)
+    total = 0
+    with tempfile.NamedTemporaryFile(delete=False, dir=temp_root) as tmp:
+        temp_file = Path(tmp.name)
+        try:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise PDFAgentError(
+                        ErrorCode.FILE_TOO_LARGE,
+                        f"File exceeds {settings.max_upload_size_mb}MB limit",
+                    )
+                tmp.write(chunk)
+        except Exception:
+            temp_file.unlink(missing_ok=True)
+            raise
+    return temp_file
 
 
 @router.get(
@@ -25,12 +70,26 @@ router = APIRouter(prefix="/api/files", tags=["files"])
     summary="List uploaded files",
     description="Returns all uploaded files ordered by most recent first.",
 )
-async def list_files(session: AsyncSession = Depends(get_session)) -> dict:
+async def list_files(
+    page: int = 1,
+    limit: int = 100,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return await _list_files_impl(page=page, limit=limit, session=session)
+
+
+async def _list_files_impl(page: int, limit: int, session: AsyncSession) -> dict:
     """List all uploaded files."""
     result = await session.execute(
         select(FileRecord).order_by(FileRecord.created_at.desc())
     )
     records = result.scalars().all()
+    page = max(1, int(page))
+    limit = max(1, min(int(limit), 200))
+    total = len(records)
+    start = (page - 1) * limit
+    end = start + limit
+    records = records[start:end]
     files = [
         {
             "id": str(r.id),
@@ -44,8 +103,7 @@ async def list_files(session: AsyncSession = Depends(get_session)) -> dict:
         }
         for r in records
     ]
-    return {"files": files, "count": len(files)}
-
+    return {"files": files, "count": len(files), "total": total, "page": page, "limit": limit}
 
 @router.post(
     "",
@@ -58,13 +116,19 @@ async def upload_file(
     session: AsyncSession = Depends(get_session),
 ) -> FileUploadResponse:
     """Upload a file (PDF, image, Office doc, etc.)."""
-    content = await file.read()
     svc = FileService(session)
-    record = await svc.upload(
-        filename=file.filename or "unknown",
-        content_type=file.content_type or "application/octet-stream",
-        content=content,
-    )
+    temp_path = await _spill_upload_to_tempfile(file)
+    try:
+        record = await svc.upload_from_path(
+            filename=file.filename or "unknown",
+            content_type=_normalize_upload_content_type(
+                file.filename or "unknown",
+                file.content_type,
+            ),
+            temp_path=temp_path,
+        )
+    finally:
+        temp_path.unlink(missing_ok=True)
     return FileUploadResponse(
         id=record.id,
         orig_name=record.orig_name,
@@ -84,16 +148,18 @@ async def delete_file(
     session: AsyncSession = Depends(get_session),
 ):
     """Delete an uploaded file from DB and disk."""
-    import shutil
     result = await session.execute(select(FileRecord).where(FileRecord.id == file_id))
     record = result.scalar_one_or_none()
     if not record:
         raise HTTPException(status_code=404, detail="File not found")
     file_dir = Path(record.storage_path).parent
-    if file_dir.exists():
-        shutil.rmtree(file_dir, ignore_errors=True)
     await session.delete(record)
     await session.commit()
+    if file_dir.exists():
+        try:
+            shutil.rmtree(file_dir, ignore_errors=False)
+        except OSError:
+            logger.warning("Failed to remove upload directory for %s", file_id, exc_info=True)
     return {"deleted": True, "id": str(file_id)}
 
 
@@ -138,32 +204,33 @@ async def get_page_image(
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
 
-    # Check cache: page images stored alongside the file
-    page_cache = pdf_path.parent / f"page_{page}.jpg"
-    if page_cache.exists():
-        return FileResponse(page_cache, media_type="image/jpeg")
-
     pdftoppm = shutil.which("pdftoppm")
     if not pdftoppm:
         raise HTTPException(status_code=503, detail="pdftoppm not installed")
 
-    with tempfile.TemporaryDirectory() as td:
-        out_stem = Path(td) / "page"
-        result = subprocess.run(
-            [pdftoppm, "-r", "96", "-jpeg", "-f", str(page), "-l", str(page),
-             "-scale-to", "400", str(pdf_path), str(out_stem)],
-            capture_output=True, timeout=30,
-        )
-        if result.returncode != 0:
-            detail = result.stderr.decode("utf-8", errors="ignore").strip() or "unknown error"
-            raise HTTPException(status_code=500, detail=f"pdftoppm failed: {detail}")
-        candidates = list(Path(td).glob("*.jpg"))
-        if not candidates:
-            raise HTTPException(status_code=500, detail="Failed to render page")
-        import shutil as _shutil
-        _shutil.copy(candidates[0], page_cache)
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    render_dir = Path(tempfile.mkdtemp(prefix="page-preview-", dir=settings.data_dir))
+    out_stem = render_dir / "page"
+    result = run_command(
+        [pdftoppm, "-r", "96", "-jpeg", "-f", str(page), "-l", str(page),
+         "-scale-to", "400", str(pdf_path), str(out_stem)],
+        check=False,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        shutil.rmtree(render_dir, ignore_errors=True)
+        detail = result.stderr.decode("utf-8", errors="ignore").strip() or "unknown error"
+        raise HTTPException(status_code=500, detail=f"pdftoppm failed: {detail}")
+    candidates = list(render_dir.glob("*.jpg"))
+    if not candidates:
+        shutil.rmtree(render_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail="Failed to render page")
 
-    return FileResponse(page_cache, media_type="image/jpeg")
+    return FileResponse(
+        candidates[0],
+        media_type="image/jpeg",
+        background=BackgroundTask(shutil.rmtree, render_dir, True),
+    )
 
 
 @router.get(

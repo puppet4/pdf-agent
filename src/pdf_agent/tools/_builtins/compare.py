@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import io
+import json
+import difflib
 from pathlib import Path
 
 import pikepdf
@@ -10,23 +12,27 @@ from PIL import Image, ImageChops
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools._builtins.pdf_to_text import _extract_page_text
 
 
 def _render_page_png(pdf_path: Path, page_idx: int, dpi: int = 72) -> Image.Image | None:
     """Render a single PDF page to PIL Image using pdftoppm."""
     import shutil
-    import subprocess
     import tempfile
+    from pdf_agent.external_commands import run_command
     pdftoppm = shutil.which("pdftoppm")
     if not pdftoppm:
         return None
     with tempfile.TemporaryDirectory() as td:
         out_stem = Path(td) / "page"
-        subprocess.run(
+        result = run_command(
             [pdftoppm, "-r", str(dpi), "-png", "-f", str(page_idx + 1), "-l", str(page_idx + 1),
              str(pdf_path), str(out_stem)],
-            capture_output=True, timeout=30,
+            check=False,
+            timeout=30,
         )
+        if result.returncode != 0:
+            return None
         candidates = list(Path(td).glob("*.png"))
         if not candidates:
             return None
@@ -62,6 +68,7 @@ class CompareTool(BaseTool):
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
         params = self.validate(params)
         output_path = workdir / "diff.pdf"
+        text_report_path = workdir / "diff_text.json"
 
         color_map = {"red": (255, 0, 0, 120), "yellow": (255, 255, 0, 120), "blue": (0, 100, 255, 120)}
         highlight_rgba = color_map[params["highlight_color"]]
@@ -73,6 +80,7 @@ class CompareTool(BaseTool):
         max_pages = max(pages1, pages2)
         diff_pages = []
         diff_count = 0
+        text_diffs: list[dict[str, object]] = []
 
         for i in range(max_pages):
             if reporter:
@@ -80,6 +88,32 @@ class CompareTool(BaseTool):
 
             img1 = _render_page_png(inputs[0], i) if i < pages1 else None
             img2 = _render_page_png(inputs[1], i) if i < pages2 else None
+
+            text1 = ""
+            text2 = ""
+            with pikepdf.open(inputs[0]) as pdf1:
+                if i < len(pdf1.pages):
+                    text1 = _extract_page_text(pdf1.pages[i]).strip()
+            with pikepdf.open(inputs[1]) as pdf2:
+                if i < len(pdf2.pages):
+                    text2 = _extract_page_text(pdf2.pages[i]).strip()
+            if text1 != text2:
+                text_diffs.append(
+                    {
+                        "page": i + 1,
+                        "left_chars": len(text1),
+                        "right_chars": len(text2),
+                        "unified_diff": list(
+                            difflib.unified_diff(
+                                text1.splitlines(),
+                                text2.splitlines(),
+                                fromfile="left",
+                                tofile="right",
+                                lineterm="",
+                            )
+                        ),
+                    }
+                )
 
             if img1 is None and img2 is None:
                 continue
@@ -127,12 +161,16 @@ class CompareTool(BaseTool):
         rest = diff_pages[1:]
         first.save(buf, format="PDF", save_all=True, append_images=rest)
         output_path.write_bytes(buf.getvalue())
+        text_report_path.write_text(
+            json.dumps({"pages_compared": max_pages, "text_diffs": text_diffs}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
         if reporter:
             reporter(100, "Done")
 
         return ToolResult(
-            output_files=[output_path],
-            meta={"pages_compared": max_pages, "pages_with_diff": diff_count},
+            output_files=[output_path, text_report_path],
+            meta={"pages_compared": max_pages, "pages_with_diff": diff_count, "pages_with_text_diff": len(text_diffs)},
             log=f"Compared {max_pages} pages, found differences on {diff_count} page(s)",
         )

@@ -1,10 +1,6 @@
-"""Digital signature tool — add a visible signature image to a PDF using pikepdf."""
+"""Digital signature tool — visible stamp and optional PKCS#12 cryptographic signing."""
 from __future__ import annotations
 
-# NOTE: Adding cryptographic digital signatures (X.509/PKCS#7) requires
-# pyhanko or endesive. This tool adds a visual signature annotation
-# without cryptographic validation. For cryptographic signing, install
-# pyhanko and configure a certificate.
 import io
 from pathlib import Path
 
@@ -23,10 +19,15 @@ class SignatureTool(BaseTool):
             name="signature",
             label="添加签名",
             category="annotation",
-            description="在 PDF 指定页面添加可见签名图片（PNG/JPG）。如需加密数字签名，请使用 pyhanko 集成。",
-            inputs=ToolInputSpec(min=2, max=2, accept=["application/pdf", "image/png", "image/jpeg"]),
+            description="支持可见签名图片叠加，以及使用 P12/X.509 进行加密数字签名。",
+            inputs=ToolInputSpec(
+                min=1,
+                max=3,
+                accept=["application/pdf", "image/png", "image/jpeg", "application/x-pkcs12"],
+            ),
             outputs=ToolOutputSpec(type="pdf"),
             params=[
+                ParamSpec(name="mode", label="签名模式", type="enum", options=["visible", "digital"], default="visible"),
                 ParamSpec(name="page", label="签名页码", type="int", default=1, min=1,
                           description="放置签名的页码（1-based）"),
                 ParamSpec(name="position", label="位置", type="enum",
@@ -35,16 +36,25 @@ class SignatureTool(BaseTool):
                 ParamSpec(name="width_pt", label="签名宽度(pt)", type="int", default=120, min=40, max=300,
                           description="签名图片显示宽度（点数）"),
                 ParamSpec(name="opacity", label="透明度", type="float", default=0.85, min=0.1, max=1.0),
+                ParamSpec(name="p12_password", label="P12 密码", type="string", default=""),
+                ParamSpec(name="field_name", label="签名域名", type="string", default="Signature1"),
+                ParamSpec(name="reason", label="签名原因", type="string", default=""),
+                ParamSpec(name="location", label="签名地点", type="string", default=""),
             ],
-            engine="pikepdf+reportlab",
+            engine="pikepdf+reportlab+pyhanko",
         )
 
     def validate(self, params: dict) -> dict:
         return {
+            "mode": params.get("mode", "visible"),
             "page": max(1, int(params.get("page", 1))),
             "position": params.get("position", "bottom-right"),
             "width_pt": max(40, min(300, int(params.get("width_pt", 120)))),
             "opacity": max(0.1, min(1.0, float(params.get("opacity", 0.85)))),
+            "p12_password": str(params.get("p12_password", "")),
+            "field_name": str(params.get("field_name", "Signature1")),
+            "reason": str(params.get("reason", "")),
+            "location": str(params.get("location", "")),
         }
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
@@ -52,17 +62,41 @@ class SignatureTool(BaseTool):
         output_path = workdir / "signed.pdf"
 
         # Identify PDF and signature image
-        pdf_path = sig_path = None
+        pdf_path = sig_path = cert_path = None
         for p in inputs:
             if p.suffix.lower() == ".pdf":
                 pdf_path = p
             elif p.suffix.lower() in (".png", ".jpg", ".jpeg"):
                 sig_path = p
+            elif p.suffix.lower() in (".p12", ".pfx"):
+                cert_path = p
         if not pdf_path:
             raise ToolError(ErrorCode.INVALID_PARAMS, "No PDF file provided")
-        if not sig_path:
-            raise ToolError(ErrorCode.INVALID_PARAMS, "No signature image provided")
 
+        if params["mode"] == "digital" or cert_path is not None:
+            pre_signed_pdf = pdf_path
+            if sig_path is not None:
+                pre_signed_pdf = workdir / "visible_signature_stage.pdf"
+                self._apply_visible_signature(pdf_path, sig_path, pre_signed_pdf, params)
+            if cert_path is None:
+                raise ToolError(ErrorCode.INVALID_PARAMS, "Digital signature requires a .p12/.pfx certificate")
+            self._apply_digital_signature(pre_signed_pdf, cert_path, output_path, params)
+            return ToolResult(
+                output_files=[output_path],
+                meta={"mode": "digital", "field_name": params["field_name"]},
+                log="Applied digital signature using PKCS#12 certificate",
+            )
+
+        if not sig_path:
+            raise ToolError(ErrorCode.INVALID_PARAMS, "Visible signature requires an image input")
+        self._apply_visible_signature(pdf_path, sig_path, output_path, params)
+        return ToolResult(
+            output_files=[output_path],
+            meta={"page": params["page"], "position": params["position"], "mode": "visible"},
+            log=f"Added signature to page {params['page']} at {params['position']}",
+        )
+
+    def _apply_visible_signature(self, pdf_path: Path, sig_path: Path, output_path: Path, params: dict) -> None:
         with pikepdf.open(pdf_path) as pdf:
             total = len(pdf.pages)
             page_idx = min(params["page"] - 1, total - 1)
@@ -99,8 +133,21 @@ class SignatureTool(BaseTool):
             pikepdf.Page(page).add_overlay(overlay.pages[0])
             pdf.save(output_path)
 
-        return ToolResult(
-            output_files=[output_path],
-            meta={"page": params["page"], "position": params["position"], "size": f"{sw:.0f}x{sh:.0f}pt"},
-            log=f"Added signature to page {params['page']} at {params['position']}",
+    def _apply_digital_signature(self, input_pdf: Path, cert_path: Path, output_path: Path, params: dict) -> None:
+        try:
+            from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
+            from pyhanko.sign import signers
+        except Exception as exc:  # pragma: no cover - optional runtime dependency
+            raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "pyhanko is required for digital signatures") from exc
+
+        password = params["p12_password"].encode("utf-8") if params["p12_password"] else None
+        signer = signers.SimpleSigner.load_pkcs12(cert_path, passphrase=password)
+        meta = signers.PdfSignatureMetadata(
+            field_name=params["field_name"],
+            reason=params["reason"] or None,
+            location=params["location"] or None,
         )
+        pdf_signer = signers.PdfSigner(meta, signer=signer)
+        with input_pdf.open("rb") as input_stream, output_path.open("wb") as output_stream:
+            writer = IncrementalPdfFileWriter(input_stream)
+            pdf_signer.sign_pdf(writer, output=output_stream)

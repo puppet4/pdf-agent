@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 from pdf_agent.core import ErrorCode, ToolError
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
@@ -37,27 +37,18 @@ class ValidateTool(BaseTool):
         is_valid = True
 
         # Run qpdf check
-        try:
-            result = subprocess.run(
-                [qpdf, "--check", str(inputs[0])],
-                capture_output=True, timeout=60, text=True,
-            )
-            stdout = result.stdout + result.stderr
-            if result.returncode != 0:
-                is_valid = False
-            for line in stdout.splitlines():
-                line = line.strip()
-                if line and not line.startswith("PDF Version") and "checking" not in line.lower():
-                    issues.append(line)
-        except subprocess.TimeoutExpired:
-            raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, "qpdf validation timed out")
+        result = run_command([qpdf, "--check", str(inputs[0])], check=False, timeout=60)
+        stdout = result.stdout.decode("utf-8", errors="replace") + result.stderr.decode("utf-8", errors="replace")
+        if result.returncode != 0:
+            is_valid = False
+        for line in stdout.splitlines():
+            line = line.strip()
+            if line and not line.startswith("PDF Version") and "checking" not in line.lower():
+                issues.append(line)
 
         # Also check linearization
         try:
-            lin_result = subprocess.run(
-                [qpdf, "--check-linearization", str(inputs[0])],
-                capture_output=True, timeout=30, text=True,
-            )
+            lin_result = run_command([qpdf, "--check-linearization", str(inputs[0])], check=False, timeout=30)
             is_linearized = lin_result.returncode == 0
         except Exception:
             is_linearized = False

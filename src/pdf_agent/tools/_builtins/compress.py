@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
-from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, ToolError
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
@@ -77,16 +76,9 @@ class CompressTool(BaseTool):
         ]
 
         try:
-            subprocess.run(
-                cmd,
-                check=True,
-                capture_output=True,
-                timeout=settings.external_cmd_timeout_sec,
-            )
-        except subprocess.TimeoutExpired:
-            raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, "Ghostscript compression timed out")
-        except subprocess.CalledProcessError as exc:
-            raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"Ghostscript failed: {exc.stderr.decode(errors='replace')}")
+            run_command(cmd)
+        except ToolError:
+            raise
 
         src_size = src_path.stat().st_size
         out_size = output_path.stat().st_size

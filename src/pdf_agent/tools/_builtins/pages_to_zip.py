@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
 
-from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, ToolError
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
@@ -56,15 +55,7 @@ class PagesToZipTool(BaseTool):
 
         with tempfile.TemporaryDirectory() as td:
             out_stem = Path(td) / "page"
-            try:
-                subprocess.run(
-                    [pdftoppm, "-r", str(params["dpi"]), ppm_flag, str(inputs[0]), str(out_stem)],
-                    check=True, capture_output=True, timeout=settings.external_cmd_timeout_sec,
-                )
-            except subprocess.TimeoutExpired:
-                raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, "pdftoppm timed out")
-            except subprocess.CalledProcessError as exc:
-                raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"pdftoppm failed: {exc.stderr.decode(errors='replace')}")
+            run_command([pdftoppm, "-r", str(params["dpi"]), ppm_flag, str(inputs[0]), str(out_stem)])
 
             images = sorted(Path(td).glob(f"*.{ext}"))
             if not images:

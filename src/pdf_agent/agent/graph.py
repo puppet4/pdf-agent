@@ -16,7 +16,7 @@ from langgraph.graph import END, StateGraph
 
 from pdf_agent.agent.prompt import build_system_prompt
 from pdf_agent.agent.state import AgentState, FileInfo
-from pdf_agent.agent.tools_adapter import adapt_all_tools
+from pdf_agent.agent.tools_adapter import get_adapted_tool_map, parse_tool_result_payload
 from pdf_agent.config import settings
 from pdf_agent.tools.registry import ToolRegistry
 
@@ -156,7 +156,7 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
             new_messages.append(ToolMessage(content=result_str, tool_call_id=call_id))
 
             # Parse output files from result string
-            output_files = _parse_output_files(result_str)
+            output_files = parse_tool_result_payload(result_str).output_files
             if output_files:
                 latest_output_files = output_files
                 for fp in output_files:
@@ -186,18 +186,6 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
         return update
 
     return tool_node
-
-
-def _parse_output_files(result_str: str) -> list[str]:
-    """Extract output file paths from the tool result string."""
-    for line in result_str.splitlines():
-        if line.startswith("Output files:"):
-            raw = line[len("Output files:"):].strip()
-            try:
-                return json.loads(raw.replace("'", '"'))
-            except (json.JSONDecodeError, ValueError):
-                pass
-    return []
 
 
 def _get_page_count(path: Path) -> int | None:
@@ -235,7 +223,7 @@ def build_graph(
 ) -> Any:  # CompiledStateGraph
     """Compile the LangGraph StateGraph with agent and tool nodes."""
     # Adapt tools
-    lc_tools = adapt_all_tools(tool_registry)
+    lc_tools = list(get_adapted_tool_map(tool_registry).values())
 
     # Create LLM
     model_kwargs: dict[str, Any] = {
