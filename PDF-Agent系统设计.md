@@ -23,7 +23,7 @@
   - [2.2 核心设计原则](#22-核心设计原则)
   - [2.3 关键模块设计](#23-关键模块设计)
   - [2.4 工具插件化规范（Manifest + Runtime）](#24-工具插件化规范manifest--runtime)
-  - [2.5 任务与工作流（Job/Step/Pipeline）](#25-任务与工作流jobsteppipeline)
+  - [2.5 任务与工作流（Execution/Pipeline）](#25-任务与工作流executionpipeline)
   - [2.6 文件存储与清理策略](#26-文件存储与清理策略)
   - [2.7 数据库设计（建议 PostgreSQL）](#27-数据库设计建议-postgresql)
   - [2.8 API 设计（REST + SSE）](#28-api-设计rest--sse)
@@ -32,8 +32,9 @@
   - [2.11 安全与可靠性](#211-安全与可靠性)
   - [2.12 可观测性与运维](#212-可观测性与运维)
   - [2.13 部署方案（Docker Compose）](#213-部署方案docker-compose)
-  - [2.14 测试策略（E2E 为主）](#214-测试策略e2e-为主)
-  - [2.15 里程碑与工作量拆解](#215-里程碑与工作量拆解)
+  - [2.14 测试策略（当前以 Smoke 为主）](#214-测试策略当前以-smoke-为主)
+  - [2.15 收口规则（禁止继续膨胀）](#215-收口规则禁止继续膨胀)
+  - [2.16 里程碑与工作量拆解](#216-里程碑与工作量拆解建议)
 - [3. 附录](#3-附录)
   - [3.1 Page Range 语法规范](#31-page-range-语法规范)
   - [3.2 错误码建议](#32-错误码建议)
@@ -79,7 +80,7 @@
 ## 1.4 需求范围与分期
 ### 1.4.1 本期（产品级基础 + 全量工具框架）
 - 工具框架：Manifest 驱动的动态表单 + 后端插件注册
-- 任务系统：Job/Step、进度、日志、取消、重试（重试可二期）
+- 任务系统：Execution、进度、日志、取消、重试（重试可二期）
 - 文件系统：上传/下载/结果、清理策略
 - 核心引擎集成：qpdf/pikepdf、poppler、ocrmypdf、ghostscript、libreoffice（可按需）
 
@@ -182,9 +183,9 @@
   - 上传区（拖拽、多文件）
   - 工具选择（分类导航）
   - 参数表单（动态渲染）
-  - 执行按钮 → 创建 Job
+  - 执行按钮 → 创建 Execution
 - Agent 模式（可选入口）
-  - 自然语言 → 生成计划（plan preview）→ 用户确认 → 创建 Job
+  - 自然语言 → 生成计划（plan preview）→ 用户确认 → 创建 Execution
 - 任务中心
   - 列表：状态、进度、耗时、结果下载
   - 详情：steps、日志、错误、输入输出
@@ -212,22 +213,44 @@
 # 2. 系统设计书（System Design）
 
 ## 2.1 架构概览
-**方案A**：React + FastAPI + Celery + Redis + PostgreSQL + Local Storage
+**方案A**：React + FastAPI + LangChain + LangGraph + PostgreSQL + Local Storage  
+**执行基础设施**：Worker + 本地队列，必要时可选 Celery/Redis
 
 组件：
 - **Frontend**：动态工具表单、任务中心、结果下载
 - **API Server**：上传、工具列表、创建任务、查询状态、SSE、下载
-- **Worker**：执行所有工具与 pipeline
-- **Redis**：队列 broker（可兼做短期进度缓存）
-- **PostgreSQL**：任务、步骤、文件元数据、审计
+- **LangChain Planner**：将自然语言请求转成结构化 plan
+- **LangGraph Runtime**：负责 Agent 对话、多步工具调用与状态推进
+- **Execution Runtime**：按 execution plan 执行结构化 step，并复用同一套 LangChain tool adapter
+- **Redis（可选）**：任务队列 broker（启用 Celery 时使用）
+- **PostgreSQL**：execution 元数据、文件元数据、审计
 - **Storage**：本地磁盘（uploads/results/tmp），可选 MinIO
 
 ## 2.2 核心设计原则
 1. **Manifest 驱动 UI**：工具多也能控住复杂度
-2. **执行确定性**：LLM 只生成计划，不直接执行
+2. **执行确定性**：LLM 通过 LangChain 只生成结构化计划，实际执行仍由受控工具层完成
 3. **多引擎并存**：用正确的引擎覆盖正确能力（qpdf/poppler/ocr/gs/libreoffice）
 4. **外部命令安全**：不拼 shell；限制超时；固定工作目录
-5. **可追溯**：Job/Step/Artifact 全链路记录
+5. **统一编排**：聊天、计划预览、任务执行共用 LangChain/LangGraph 语义，不维护第二套自实现规划器
+6. **可追溯**：Execution 全链路记录，必要信息直接收敛在 execution record 中
+
+### 2.2.1 当前阶段的最终目标架构
+为避免继续架构膨胀，当前阶段的目标架构固定为四层：
+
+- **API / Orchestration**
+  - 负责上传、工具清单、plan preview、创建 execution、查询状态、SSE、结果下载
+  - 不承载 PDF 处理实现细节
+- **Execution Runner**
+  - 负责 execution 排队、启动、取消、进度推进、错误收敛、结果落盘
+  - 是唯一允许编排多 step 执行的地方
+- **Tool Plugins**
+  - 每个工具只做输入校验、参数归一化、执行、产物输出
+  - 不自行实现队列、事件流、数据库写入
+- **Storage**
+  - 只负责文件和 execution 元数据持久化
+  - 不扩展出新的业务编排抽象
+
+当前阶段不再引入新的重型任务模型、事件总线、独立编排 DSL 或额外微服务。
 
 ## 2.3 关键模块设计
 ### 2.3.1 Tool Registry（工具注册中心）
@@ -235,25 +258,33 @@
 - 提供 `/api/tools` 返回 manifest 列表
 - 提供运行时查找 tool：`registry.get(tool_name)`
 
-### 2.3.2 Job Service（任务服务）
+### 2.3.2 Execution Service（执行服务）
 - 接收用户请求（表单 or agent）
-- 生成 plan（表单=单步 plan，agent=多步 plan）
+- 生成 plan（表单=单步 plan，agent=LangChain 结构化多步 plan）
 - plan JSON Schema 校验
-- 创建 job/steps 记录
-- 投递 Celery 任务
+- 创建 execution record
+- 投递本地任务或 Celery 任务（可选）
 
 ### 2.3.3 Worker Orchestrator（编排器）
-- 读取 job plan
+- 读取 execution plan
+- 通过 LangChain `StructuredTool` adapter 统一执行 step
 - 逐 step 执行：
   - validate params
   - run tool（产生 output）
-  - 记录 artifact
-  - 更新 step 状态与 job 进度
+  - 更新 execution logs / outputs / progress
 - 失败处理：
   - 记录错误码、stderr 摘要
-  - 标记 job FAILED
+  - 标记 execution FAILED
 - 取消处理：
-  - job 标记 CANCELED；必要时 kill 外部进程
+  - execution 标记 CANCELED；必要时 kill 外部进程
+
+### 2.3.4 模块边界约束
+- `api/*`：只做请求编解码、调用 service、返回响应；不要沉积工具执行细节
+- `agent/*`：只负责 LangChain/LangGraph 的聊天、规划、tool adapter；不要变成第二套 execution runtime
+- `execution_*` 与 `api/executions.py`：负责 execution 生命周期；不要重新长出 Job/Step/Artifact 表
+- `tools/_builtins/*`：只关心工具本身；不要直接写 execution 状态、不要直接操作 SSE、不要直接写数据库
+- `external_commands.py`：是唯一的外部命令执行入口；不要再在活跃运行路径里散落新的 `subprocess.run(...)`
+- `db/models.py`：当前只保留 `FileRecord` 与 `ExecutionRecord` 为核心持久化对象；不为“也许以后有用”预埋复杂实体
 
 ## 2.4 工具插件化规范（Manifest + Runtime）
 ### 2.4.1 Manifest 规范（建议）
@@ -275,7 +306,13 @@
 - `meta`（页数、大小、耗时）
 - `log`（摘要）
 
-## 2.5 任务与工作流（Job/Step/Pipeline）
+## 2.5 任务与工作流（Execution/Pipeline）
+### 2.5.0 Agent 规划与执行
+- `Agent chat`：由 LangGraph StateGraph 驱动，对话中按需调用 LangChain tools
+- `Plan preview`：由 LangChain 结构化输出生成待确认 plan
+- `Plan confirm / workflow execute`：统一落地为 execution record，再由 execution runtime 按 step 执行
+- workflow 模板只负责声明 step 模板，不单独维护另一套执行器
+
 ### 2.5.1 Plan Schema（建议）
 ```json
 {
@@ -306,13 +343,13 @@
 目录：
 
 - `data/uploads/{file_id}/source.pdf`
-- `data/jobs/{job_id}/work/`（中间产物）
-- `data/jobs/{job_id}/output/`（最终产物）
+- `data/executions/{execution_id}/work/`（中间产物）
+- `data/executions/{execution_id}/output/`（最终产物）
 
 清理：
 
-- 定时清理过期 job 目录（保留 N 天）
-- 清理孤儿 uploads（无 job 引用）
+- 定时清理过期 execution 目录（保留 N 天）
+- 清理孤儿 uploads（无 execution 引用）
 - 限制总容量（超限按 LRU 清理，或拒绝新任务）
 
 ## 2.7 数据库设计（建议 PostgreSQL）
@@ -330,7 +367,7 @@
 - storage_path
 - created_at
 
-**jobs**
+**executions**
 
 - id (uuid)
 - status (PENDING/RUNNING/SUCCESS/FAILED/CANCELED)
@@ -338,36 +375,18 @@
 - instruction (nullable)
 - plan_json
 - progress_int (0~100)
+- active_tool (nullable)
+- logs_json
+- outputs_json
 - error_code (nullable)
 - error_message (nullable)
 - created_at / updated_at
 - result_path (nullable)
 - result_type (pdf/zip/text/json)
 
-**job_steps**
-
-- id
-- job_id
-- idx
-- tool_name
-- params_json
-- status
-- started_at / ended_at
-- log_text
-- output_path (nullable)
-
-**artifacts**（可选）
-
-- id
-- job_id
-- step_id
-- type (input/intermediate/output)
-- path
-- meta_json
-
 索引：
 
-- jobs(status, created_at)
+- executions(status, created_at)
 - files(sha256)（可选去重）
 
 ## 2.8 API 设计（REST + SSE）
@@ -375,11 +394,11 @@
 - `GET /api/tools`：工具列表（manifest）
 - `POST /api/files`：上传
 - `GET /api/files/{id}/download`：下载原文件
-- `POST /api/jobs`：创建任务（表单 or agent）
-- `GET /api/jobs/{id}`：查询状态/进度/结果
-- `POST /api/jobs/{id}/cancel`：取消
-- `GET /api/jobs/{id}/events`：SSE 推送（progress/log/step）
-- `GET /api/jobs/{id}/result`：下载结果
+- `POST /api/executions`：创建执行（表单 or agent）
+- `GET /api/executions/{id}`：查询状态/进度/结果
+- `POST /api/executions/{id}/cancel`：取消
+- `GET /api/executions/{id}/events`：SSE 推送（progress/log/step）
+- `GET /api/executions/{id}/result`：下载结果
 
 ## 2.9 前端设计（动态表单 + 少量专用页面）
 
@@ -405,31 +424,31 @@
 
 - 上传校验：扩展名 + magic header + MIME
 - 外部命令执行：
-  - `subprocess.run([...], timeout=...)` 形式
+  - 统一通过共享命令执行封装运行外部命令
   - 固定 workdir，禁止用户输入路径
   - 输出路径白名单
 - 超时与取消：长任务可 kill 子进程
-- 失败隔离：step 失败只影响该 job
+- 失败隔离：step 失败只影响该 execution
 - 资源限制：并发、最大文件大小、最大页数、磁盘水位
 
 ## 2.12 可观测性与运维
 
-- 结构化日志：包含 job_id、step_id、tool_name
+- 结构化日志：包含 execution_id、step/tool、status、error_code
 - 指标：
-  - job 数量、失败率、平均耗时
-  - 队列长度（celery/redis）
+  - execution 数量、失败率、平均耗时
+  - 队列长度（本地队列或 celery/redis）
 - 健康检查：
   - `/healthz`（API）
-  - worker 心跳（Celery events 可选）
+  - worker 心跳（本地或 Celery 后端）
 
 ## 2.13 部署方案（Docker Compose）
 
 服务：
 
-- redis
 - postgres
 - api
 - worker
+- redis（可选，启用 Celery 时需要）
 - frontend（可选，也可静态部署）
 
 镜像内置依赖：
@@ -440,20 +459,33 @@
 - ocrmypdf + tesseract + 语言包（chi_sim、eng）
 - libreoffice（体积大，可做可选镜像）
 
-## 2.14 测试策略（E2E 为主）
+## 2.14 测试策略（当前以 Smoke 为主）
 
-- 单元测试：page range 解析、参数校验、manifest 校验
-- 集成测试：每个 tool 用固定样例 PDF 验证输出可打开、页数、hash变化
-- E2E：API 上传 → 创建 job → 等待完成 → 下载 → 断言
-- 回归测试：工具矩阵每项至少一个样例
+- 当前开发阶段保留少量 smoke tests，覆盖核心 API 面、executions 主链路、代表性工具与前端入口
+- 对重度工具能力不做大规模细粒度回归，避免测试维护成本反向拖慢开发
+- 关键验证方式：
+  - 应用能启动，核心路由存在
+  - executions / agent / workflow 主链路可创建并推进任务
+  - 代表性工具可执行并产出合法结果
+- 后续若进入稳定期，再补充分层集成测试与更完整的 E2E
 
-## 2.15 里程碑与工作量拆解（建议）
+## 2.15 收口规则（禁止继续膨胀）
+
+- 不新增 `Job/Step/Artifact` 一类重型持久化模型，除非产品形态明确变为多租户任务平台
+- 不再实现第二套 planner / orchestrator；聊天、计划、执行统一复用 LangChain/LangGraph + execution runtime
+- 不在工具内部重复实现超时、取消、进度、数据库写入，统一走共享执行链路
+- 不为局部需求拆微服务；当前阶段坚持单体 API + worker 的简单部署形态
+- 测试保持 smoke 为主，只补关键回归，不恢复大而全的实现耦合测试
+- 新功能进入前先判断应落在哪一层；如果跨层泄漏，先改边界再写功能
+
+## 2.16 里程碑与工作量拆解（建议）
 
 **阶段0：框架可运行**
 
 - 文件上传/下载
-- Job/Step 模型 + Celery
+- Execution 模型 + LangChain/LangGraph 编排主链路
 - `/api/tools` + 动态表单（最小）
+- Worker / 队列基础设施（本地优先，Celery 可选）
 
 **阶段1：高频核心工具**
 
@@ -500,10 +532,10 @@
 - `ENGINE_EXEC_TIMEOUT`
 - `ENGINE_EXEC_FAILED`
 - `OUTPUT_GENERATION_FAILED`
-- `JOB_CANCELED`
+- `EXECUTION_CANCELED`
 
 ## 3.3 输出命名规范
 
-- 单输出：`{job_id}_{tool_or_pipeline}.pdf`
+- 单输出：`{execution_id}_{tool_or_pipeline}.pdf`
 - 多输出：zip 内部 `{origName}_{tool}_{index}.pdf`
 - 图片输出：`page_{pageNo}.png`
