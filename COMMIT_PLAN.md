@@ -45,22 +45,18 @@ Expected outcome:
 Message:
 
 ```text
-refactor: replace legacy jobs runtime with executions backbone
+refactor: collapse legacy execution infrastructure into chat-first runtime
 ```
 
 Suggested paths:
 
 ```bash
 git add \
-  src/pdf_agent/api/executions.py \
-  src/pdf_agent/execution_queue.py \
   src/pdf_agent/external_commands.py \
   src/pdf_agent/api/router.py \
-  src/pdf_agent/api/tools.py \
   src/pdf_agent/api/files.py \
   src/pdf_agent/api/metrics.py \
   src/pdf_agent/api/agent.py \
-  src/pdf_agent/api/workflows.py \
   src/pdf_agent/main.py \
   src/pdf_agent/config.py \
   src/pdf_agent/db/models.py \
@@ -71,18 +67,22 @@ git add \
   src/pdf_agent/api/health.py \
   src/pdf_agent/api/middleware.py \
   src/pdf_agent/core/__init__.py \
-  src/pdf_agent/worker.py \
   src/pdf_agent/static/index.html \
   src/pdf_agent/static/react-app.js \
   src/pdf_agent/api/jobs.py \
+  src/pdf_agent/api/tools.py \
+  src/pdf_agent/api/workflows.py \
+  src/pdf_agent/api/executions.py \
+  src/pdf_agent/execution_queue.py \
+  src/pdf_agent/worker.py \
   src/pdf_agent/static/app.js \
   src/pdf_agent/static/tools.html \
   src/pdf_agent/webhook.py
 ```
 
 Notes:
-- include deletions for `jobs.py`, `app.js`, `tools.html`, `webhook.py`
-- this commit should establish the execution-centric runtime
+- include deletions for `jobs.py`, `tools.py`, `workflows.py`, `executions.py`, `execution_queue.py`, `worker.py`, `app.js`, `tools.html`, `webhook.py`
+- this commit should establish the simplified conversation-first runtime
 
 ### Commit 2
 
@@ -151,7 +151,6 @@ git add \
   task_plan.md \
   findings.md \
   progress.md \
-  tests/test_executions_api.py \
   tests/test_smoke_core.py \
   tests/test_smoke_tools.py \
   tests/test_agent_api.py \
@@ -181,7 +180,7 @@ Notes:
 Use at least:
 
 ```bash
-python -m py_compile src/pdf_agent/agent/tools_adapter.py tests/test_executions_api.py tests/test_smoke_core.py
+python -m py_compile src/pdf_agent/api/router.py src/pdf_agent/api/agent.py src/pdf_agent/main.py tests/test_smoke_core.py
 PYTHONPATH=src .venv/bin/python -m pytest tests -q
 ```
 

@@ -1,6 +1,6 @@
-# PDF Agent Toolbox（对标 Stirling-PDF）PRD + 系统设计书（单机/内网工具版）
+# PDF Agent（对标 Stirling-PDF）PRD + 系统设计书（单机/内网工具版）
 
-> **目标**：实现与 Stirling-PDF 同等级别的 PDF 工具集合（功能矩阵可对齐），并支持 Agent 自然语言入口与可编排工作流（pipeline）。
+> **目标**：实现与 Stirling-PDF 同等级别的 PDF 工具集合（功能矩阵可对齐），并以自然语言对话作为唯一主交互；旧的手动工具、工作流、执行管理 HTTP 入口不再保留为产品接口。
 >
 > **范围声明**：不考虑多租户、登录、RBAC、配额等；专注 **PDF 处理技术** 与 **工程落地**。
 >
@@ -27,7 +27,7 @@
   - [2.6 文件存储与清理策略](#26-文件存储与清理策略)
   - [2.7 数据库设计（建议 PostgreSQL）](#27-数据库设计建议-postgresql)
   - [2.8 API 设计（REST + SSE）](#28-api-设计rest--sse)
-  - [2.9 前端设计（动态表单 + 少量专用页面）](#29-前端设计动态表单--少量专用页面)
+  - [2.9 前端设计（Conversation-First）](#29-前端设计conversation-first)
   - [2.10 依赖引擎选型（实现全量 PDF 能力）](#210-依赖引擎选型实现全量-pdf-能力)
   - [2.11 安全与可靠性](#211-安全与可靠性)
   - [2.12 可观测性与运维](#212-可观测性与运维)
@@ -45,10 +45,10 @@
 # 1. 产品需求文档（PRD）
 
 ## 1.1 产品概述
-**产品名称**：PDF Agent Toolbox（对标 Stirling-PDF）  
-**产品形态**：Web 工具箱（自托管），支持“传统表单操作”与“自然语言 Agent 入口”。  
+**产品名称**：PDF Agent（对标 Stirling-PDF）  
+**产品形态**：Chat-first Web 应用（自托管），以“上传文件 + 对话处理 PDF”为核心路径。  
 **核心价值**：
-- 覆盖 PDF 全量处理需求（工具箱）
+- 覆盖 PDF 全量处理需求（对话入口驱动内部工具执行）
 - 重任务（OCR/转换/压缩/批处理）异步化、可追踪
 - 本地/内网运行，文件不出域
 - 工具执行可审计、可复现（便于排障与回放）
@@ -217,8 +217,8 @@
 **执行基础设施**：Worker + 本地队列，必要时可选 Celery/Redis
 
 组件：
-- **Frontend**：动态工具表单、任务中心、结果下载
-- **API Server**：上传、工具列表、创建任务、查询状态、SSE、下载
+- **Frontend**：会话列表、输入文件选择、对话区、结果下载
+- **API Server**：上传、会话接口、Agent 对话流、内部执行接口、下载
 - **LangChain Planner**：将自然语言请求转成结构化 plan
 - **LangGraph Runtime**：负责 Agent 对话、多步工具调用与状态推进
 - **Execution Runtime**：按 execution plan 执行结构化 step，并复用同一套 LangChain tool adapter
@@ -238,7 +238,7 @@
 为避免继续架构膨胀，当前阶段的目标架构固定为四层：
 
 - **API / Orchestration**
-  - 负责上传、工具清单、plan preview、创建 execution、查询状态、SSE、结果下载
+  - 负责上传、对话、会话结果查询与下载
   - 不承载 PDF 处理实现细节
 - **Execution Runner**
   - 负责 execution 排队、启动、取消、进度推进、错误收敛、结果落盘
@@ -255,7 +255,6 @@
 ## 2.3 关键模块设计
 ### 2.3.1 Tool Registry（工具注册中心）
 - 启动时加载所有工具插件
-- 提供 `/api/tools` 返回 manifest 列表
 - 提供运行时查找 tool：`registry.get(tool_name)`
 
 ### 2.3.2 Execution Service（执行服务）
@@ -280,11 +279,10 @@
 
 ### 2.3.4 模块边界约束
 - `api/*`：只做请求编解码、调用 service、返回响应；不要沉积工具执行细节
-- `agent/*`：只负责 LangChain/LangGraph 的聊天、规划、tool adapter；不要变成第二套 execution runtime
-- `execution_*` 与 `api/executions.py`：负责 execution 生命周期；不要重新长出 Job/Step/Artifact 表
+- `agent/*`：只负责 LangChain/LangGraph 的聊天与 tool adapter；不要长出第二套并行编排体系
 - `tools/_builtins/*`：只关心工具本身；不要直接写 execution 状态、不要直接操作 SSE、不要直接写数据库
 - `external_commands.py`：是唯一的外部命令执行入口；不要再在活跃运行路径里散落新的 `subprocess.run(...)`
-- `db/models.py`：当前只保留 `FileRecord` 与 `ExecutionRecord` 为核心持久化对象；不为“也许以后有用”预埋复杂实体
+- `db/models.py`：当前只保留 `FileRecord` 作为核心持久化对象；不为“也许以后有用”预埋复杂实体
 
 ## 2.4 工具插件化规范（Manifest + Runtime）
 ### 2.4.1 Manifest 规范（建议）
@@ -309,9 +307,8 @@
 ## 2.5 任务与工作流（Execution/Pipeline）
 ### 2.5.0 Agent 规划与执行
 - `Agent chat`：由 LangGraph StateGraph 驱动，对话中按需调用 LangChain tools
-- `Plan preview`：由 LangChain 结构化输出生成待确认 plan
-- `Plan confirm / workflow execute`：统一落地为 execution record，再由 execution runtime 按 step 执行
-- workflow 模板只负责声明 step 模板，不单独维护另一套执行器
+- 不再保留 `Plan preview / confirm` 或 workflow 独立 HTTP 入口
+- 多步 PDF 处理直接在对话中完成，并把产物写入当前会话目录
 
 ### 2.5.1 Plan Schema（建议）
 ```json
@@ -391,27 +388,32 @@
 
 ## 2.8 API 设计（REST + SSE）
 
-- `GET /api/tools`：工具列表（manifest）
 - `POST /api/files`：上传
 - `GET /api/files/{id}/download`：下载原文件
-- `POST /api/executions`：创建执行（表单 or agent）
-- `GET /api/executions/{id}`：查询状态/进度/结果
-- `POST /api/executions/{id}/cancel`：取消
-- `GET /api/executions/{id}/events`：SSE 推送（progress/log/step）
-- `GET /api/executions/{id}/result`：下载结果
+- `POST /api/agent/chat`：对话入口（SSE 返回 token / step / result）
+- `GET /api/agent/threads`：会话列表
+- `GET /api/agent/threads/{id}`：会话详情
+- `GET /api/agent/threads/{id}/files`：当前会话结果文件
+- `GET /api/agent/threads/{id}/files/{file_path}`：下载当前会话结果文件
+- `DELETE /api/agent/threads/{id}`：删除会话
+- `POST /api/files`：上传输入文件
+- `GET /api/files/{id}/download`：下载原始上传文件
 
-## 2.9 前端设计（动态表单 + 少量专用页面）
+## 2.9 前端设计（Conversation-First）
 
-- 左侧：分类工具列表（来自 `/api/tools`）
-- 主区：动态渲染参数表单（根据 manifest params）
-- 任务中心：列表 + 详情弹窗/独立页
-- 少量专用页面（后期）：
+- 左侧：会话列表，仅呈现对话历史
+- 主区：聊天区，用户通过自然语言描述 PDF 目标结果
+- 右侧：输入文件选择 + 当前会话结果下载
+- 默认 UI 不直接暴露工具、工作流、执行管理入口
+- 服务 HTTP 表层只保留“上传 + 对话 + 结果下载”主链路
+- 工具与执行能力保留在内部运行时，不再提供独立手动 HTTP 入口
+- 少量专用页面（后期，如确有必要）：
   - 页重排拖拽
   - PDF 对比可视化（像素差异）
 
 ## 2.10 依赖引擎选型（实现全量 PDF 能力）
 
-为覆盖全量工具箱，建议引擎组合：
+为覆盖全量 PDF 能力，建议引擎组合：
 
 - **pikepdf/qpdf**：合并/拆分/修复/线性化/加解密/对象级优化
 - **poppler**：渲染、导出图片、导出文本
@@ -436,10 +438,10 @@
 - 结构化日志：包含 execution_id、step/tool、status、error_code
 - 指标：
   - execution 数量、失败率、平均耗时
-  - 队列长度（本地队列或 celery/redis）
+  - 对话请求数量、失败率、平均耗时
 - 健康检查：
   - `/healthz`（API）
-  - worker 心跳（本地或 Celery 后端）
+  - agent 初始化状态
 
 ## 2.13 部署方案（Docker Compose）
 
@@ -447,8 +449,6 @@
 
 - postgres
 - api
-- worker
-- redis（可选，启用 Celery 时需要）
 - frontend（可选，也可静态部署）
 
 镜像内置依赖：
@@ -461,20 +461,20 @@
 
 ## 2.14 测试策略（当前以 Smoke 为主）
 
-- 当前开发阶段保留少量 smoke tests，覆盖核心 API 面、executions 主链路、代表性工具与前端入口
+- 当前开发阶段保留少量 smoke tests，覆盖核心 API 面、对话主链路、代表性工具与前端入口
 - 对重度工具能力不做大规模细粒度回归，避免测试维护成本反向拖慢开发
 - 关键验证方式：
   - 应用能启动，核心路由存在
-  - executions / agent / workflow 主链路可创建并推进任务
+  - 上传 / 会话 / 结果下载主链路可创建并推进任务
   - 代表性工具可执行并产出合法结果
 - 后续若进入稳定期，再补充分层集成测试与更完整的 E2E
 
 ## 2.15 收口规则（禁止继续膨胀）
 
 - 不新增 `Job/Step/Artifact` 一类重型持久化模型，除非产品形态明确变为多租户任务平台
-- 不再实现第二套 planner / orchestrator；聊天、计划、执行统一复用 LangChain/LangGraph + execution runtime
-- 不在工具内部重复实现超时、取消、进度、数据库写入，统一走共享执行链路
-- 不为局部需求拆微服务；当前阶段坚持单体 API + worker 的简单部署形态
+- 不再实现第二套 planner / orchestrator；对话主链路统一复用 LangChain/LangGraph
+- 不在工具内部重复实现超时、进度、数据库写入，统一走共享工具执行链路
+- 不为局部需求拆微服务；当前阶段坚持单体 API 的简单部署形态
 - 测试保持 smoke 为主，只补关键回归，不恢复大而全的实现耦合测试
 - 新功能进入前先判断应落在哪一层；如果跨层泄漏，先改边界再写功能
 
@@ -484,7 +484,7 @@
 
 - 文件上传/下载
 - Execution 模型 + LangChain/LangGraph 编排主链路
-- `/api/tools` + 动态表单（最小）
+- 对话式 PDF 处理主链路（最小）
 - Worker / 队列基础设施（本地优先，Celery 可选）
 
 **阶段1：高频核心工具**

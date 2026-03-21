@@ -9,14 +9,12 @@ class Settings(BaseSettings):
     model_config = {"env_prefix": "PDF_AGENT_"}
 
     # --- App ---
-    app_name: str = "PDF Toolbox"
+    app_name: str = "PDF Agent"
     debug: bool = False
+    expose_api_docs: bool = False
 
     # --- Database (async for FastAPI) ---
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent"
-    redis_url: str = "redis://localhost:6379/0"
-    celery_enabled: bool = False
-    celery_task_always_eager: bool = False
 
     # --- OpenAI / LLM ---
     openai_api_key: str = ""
@@ -48,7 +46,6 @@ class Settings(BaseSettings):
 
     # --- Cleanup ---
     thread_ttl_hours: int = 72  # delete thread workdirs older than this
-    job_ttl_hours: int = 72
     max_storage_gb: int = 10
 
     # --- Observability ---
@@ -63,16 +60,8 @@ class Settings(BaseSettings):
         return self.data_dir / "uploads"
 
     @property
-    def executions_dir(self) -> Path:
-        return self.data_dir / "executions"
-
-    @property
     def threads_dir(self) -> Path:
         return self.data_dir / "threads"
-
-    @property
-    def worker_dir(self) -> Path:
-        return self.data_dir / "worker"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -84,9 +73,7 @@ class Settings(BaseSettings):
 
     def ensure_dirs(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
-        self.executions_dir.mkdir(parents=True, exist_ok=True)
         self.threads_dir.mkdir(parents=True, exist_ok=True)
-        self.worker_dir.mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()

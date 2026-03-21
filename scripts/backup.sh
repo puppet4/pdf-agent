@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# PDF Toolbox backup script
+# PDF Agent backup script
 # Usage: ./scripts/backup.sh [backup_dir]
-# Cron (daily at 2am): 0 2 * * * /app/scripts/backup.sh /backups >> /var/log/pdf-toolbox-backup.log 2>&1
+# Cron (daily at 2am): 0 2 * * * /app/scripts/backup.sh /backups >> /var/log/pdf-agent-backup.log 2>&1
 
 set -euo pipefail
 
@@ -46,7 +46,7 @@ fi
 
 # 3. Manifest
 cat > "${DEST}/manifest.txt" << EOF
-PDF Toolbox Backup
+PDF Agent Backup
 Date: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 Database: ${DB_NAME}@${DB_HOST}:${DB_PORT}
 Data dir: ${DATA_DIR}

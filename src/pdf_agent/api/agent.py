@@ -1,4 +1,4 @@
-"""Agent API — chat endpoints plus plan-preview execution creation."""
+"""Agent API — conversation streaming and conversation file access."""
 from __future__ import annotations
 
 import asyncio
@@ -13,18 +13,14 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from pdf_agent.agent.state import FileInfo
 from pdf_agent.agent.tools_adapter import parse_tool_result_payload
-from pdf_agent.api.executions import create_execution_record
 from pdf_agent.config import settings
 from pdf_agent.db import async_session_factory
 from pdf_agent.db.models import FileRecord
-from pdf_agent.tools.registry import registry
 
 logger = logging.getLogger(__name__)
 
@@ -47,27 +43,6 @@ class ChatRequest(BaseModel):
     thread_id: str | None = None
     message: str
     file_ids: list[str] = []
-
-
-class AgentPlanRequest(BaseModel):
-    message: str
-    file_ids: list[str] = []
-
-
-class AgentPlanConfirmRequest(BaseModel):
-    mode: str = "AGENT"
-    instruction: str
-    plan: dict
-
-
-class PlannerStep(BaseModel):
-    tool: str
-    params: dict = Field(default_factory=dict)
-
-
-class PlannerResponse(BaseModel):
-    steps: list[PlannerStep] = Field(default_factory=list)
-    output: dict = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -195,117 +170,6 @@ def _extract_output_files(output: str) -> list[str]:
     if not isinstance(output, str):
         return []
     return parse_tool_result_payload(output).output_files
-
-
-def _planner_tool_catalog() -> str:
-    lines: list[str] = []
-    for tool in registry.list_all():
-        manifest = tool.manifest()
-        params = ", ".join(
-            f"{param.name}:{param.type}{'*' if param.required else ''}"
-            for param in manifest.params
-        ) or "none"
-        lines.append(
-            f"- {manifest.name}: {manifest.description or manifest.label}; "
-            f"inputs={manifest.inputs.min}-{manifest.inputs.max}; params={params}"
-        )
-    return "\n".join(lines)
-
-
-def _planner_file_context(files: list[FileInfo]) -> str:
-    lines = []
-    for file in files:
-        page_count = file.get("page_count")
-        page_text = f", pages={page_count}" if page_count is not None else ""
-        lines.append(
-            f"- file_id={file['file_id']}, name={file['orig_name']}, mime={file['mime_type']}{page_text}"
-        )
-    return "\n".join(lines)
-
-
-def _build_planner_llm() -> ChatOpenAI:
-    if not settings.openai_api_key:
-        raise HTTPException(status_code=503, detail="Agent plan preview requires PDF_AGENT_OPENAI_API_KEY")
-    kwargs = {
-        "model": settings.openai_model,
-        "temperature": settings.agent_temperature,
-        "api_key": settings.openai_api_key,
-    }
-    if settings.openai_base_url:
-        kwargs["base_url"] = settings.openai_base_url
-    return ChatOpenAI(**kwargs)
-
-
-async def _generate_plan_with_langchain(message: str, files: list[FileInfo]) -> dict:
-    planner = _build_planner_llm().with_structured_output(PlannerResponse)
-    response = await planner.ainvoke(
-        [
-            SystemMessage(
-                content=(
-                    "You are a PDF tool planner. Build an executable plan using only the listed tools. "
-                    "Return the minimum step sequence needed for the user request. "
-                    "Do not invent tool names or parameter names. "
-                    "The first step will receive the uploaded files automatically; later steps will receive previous outputs automatically."
-                )
-            ),
-            HumanMessage(
-                content=(
-                    f"User request:\n{message}\n\n"
-                    f"Uploaded files:\n{_planner_file_context(files)}\n\n"
-                    f"Available tools:\n{_planner_tool_catalog()}\n\n"
-                    "Return only the structured plan."
-                )
-            ),
-        ]
-    )
-    return _normalize_planner_response(response, [file["file_id"] for file in files])
-
-
-def _normalize_planner_response(planner_response: PlannerResponse, file_ids: list[str]) -> dict:
-    normalized_steps: list[dict] = []
-    for index, step in enumerate(planner_response.steps):
-        tool = registry.get(step.tool)
-        if tool is None:
-            raise HTTPException(status_code=422, detail=f"Planner returned unknown tool: {step.tool}")
-        try:
-            normalized_params = tool.validate(step.params or {})
-        except Exception as exc:
-            raise HTTPException(status_code=422, detail=f"Planner returned invalid params for {step.tool}: {exc}") from exc
-        normalized_steps.append(
-            {
-                "tool": step.tool,
-                "inputs": [{"type": "file", "file_id": file_id} for file_id in file_ids] if index == 0 else [{"type": "prev"}],
-                "params": normalized_params,
-            }
-        )
-    if not normalized_steps:
-        raise HTTPException(status_code=422, detail="Planner returned no executable steps")
-    output = planner_response.output if isinstance(planner_response.output, dict) else {}
-    return {"version": "1.0", "steps": normalized_steps, "output": output}
-
-
-@router.post("/plans/preview")
-async def preview_agent_plan(req: AgentPlanRequest):
-    if not req.file_ids:
-        raise HTTPException(status_code=422, detail="file_ids must not be empty")
-    files = await _resolve_uploaded_files(req.file_ids)
-    plan = await _generate_plan_with_langchain(req.message, files)
-    return {
-        "instruction": req.message,
-        "plan": plan,
-        "requires_confirmation": True,
-    }
-
-
-@router.post("/plans/confirm")
-async def confirm_agent_plan(req: AgentPlanConfirmRequest):
-    return await create_execution_record(
-        mode=req.mode,
-        instruction=req.instruction,
-        steps=req.plan.get("steps", []),
-        file_ids=[],
-        output=req.plan.get("output", {}),
-    )
 
 
 # ---------------------------------------------------------------------------

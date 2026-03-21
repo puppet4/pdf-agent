@@ -1,7 +1,7 @@
 [project]
 name = "pdf-agent"
 version = "0.1.0"
-description = "PDF Agent Toolbox - A comprehensive PDF processing toolkit"
+description = "PDF Agent - A chat-first PDF processing agent"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115.0",
@@ -17,8 +17,6 @@ dependencies = [
     "reportlab>=4.0.0",
     "httpx>=0.28.0",
     "aiofiles>=24.1.0",
-    "celery[redis]>=5.4.0",
-    "redis>=5.2.0",
     "langgraph>=0.4.0",
     "langchain-openai>=0.3.0",
     "langgraph-checkpoint-postgres>=2.0.0",
