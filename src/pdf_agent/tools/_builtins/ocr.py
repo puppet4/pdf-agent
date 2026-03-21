@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
 from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, ToolError
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
@@ -42,6 +42,21 @@ class OcrTool(BaseTool):
                     default=False,
                     description="是否自动校正页面倾斜",
                 ),
+                ParamSpec(
+                    name="page_range",
+                    label="OCR 页范围",
+                    type="page_range",
+                    default="all",
+                    description="仅对指定页做 OCR，all 表示全部",
+                ),
+                ParamSpec(
+                    name="output_mode",
+                    label="输出模式",
+                    type="enum",
+                    options=["pdf", "txt", "json"],
+                    default="pdf",
+                    description="pdf=可搜索 PDF, txt=旁路文本, json=结构化文本摘要",
+                ),
             ],
             engine="ocrmypdf",
             async_hint=True,
@@ -52,6 +67,8 @@ class OcrTool(BaseTool):
             "language": params.get("language", "eng"),
             "skip_text": _to_bool(params.get("skip_text", True)),
             "deskew": _to_bool(params.get("deskew", False)),
+            "page_range": params.get("page_range", "all"),
+            "output_mode": params.get("output_mode", "pdf"),
         }
 
     def run(
@@ -69,34 +86,47 @@ class OcrTool(BaseTool):
 
         output_path = workdir / "ocr_output.pdf"
         src_path = inputs[0]
+        sidecar_path = workdir / "ocr_output.txt"
 
         cmd = [
             ocrmypdf_bin,
             "--language", params["language"],
             "--output-type", "pdf",
+            "--sidecar", str(sidecar_path),
         ]
         if params["skip_text"]:
             cmd.append("--skip-text")
         if params["deskew"]:
             cmd.append("--deskew")
+        if params["page_range"] and params["page_range"] != "all":
+            cmd.extend(["--pages", params["page_range"]])
         cmd.extend([str(src_path), str(output_path)])
 
-        try:
-            subprocess.run(
-                cmd,
-                check=True,
-                capture_output=True,
-                timeout=settings.external_cmd_timeout_sec,
+        run_command(cmd, timeout=settings.external_cmd_timeout_sec)
+
+        output_files = [output_path]
+        if params["output_mode"] == "txt":
+            output_files = [sidecar_path]
+        elif params["output_mode"] == "json":
+            json_path = workdir / "ocr_output.json"
+            json_path.write_text(
+                __import__("json").dumps(
+                    {
+                        "language": params["language"],
+                        "page_range": params["page_range"],
+                        "text": sidecar_path.read_text(encoding="utf-8") if sidecar_path.exists() else "",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
             )
-        except subprocess.TimeoutExpired:
-            raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, "OCR processing timed out")
-        except subprocess.CalledProcessError as exc:
-            raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"ocrmypdf failed: {exc.stderr.decode(errors='replace')}")
+            output_files = [json_path]
 
         return ToolResult(
-            output_files=[output_path],
-            meta={"language": params["language"]},
-            log=f"OCR completed with language={params['language']}",
+            output_files=output_files,
+            meta={"language": params["language"], "page_range": params["page_range"], "output_mode": params["output_mode"]},
+            log=f"OCR completed with language={params['language']} output={params['output_mode']}",
         )
 
 

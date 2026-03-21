@@ -1,6 +1,7 @@
-"""Split tool - split PDF by page ranges or fixed chunk size."""
+"""Split tool - split PDF by page ranges, chunks, or bookmarks."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pikepdf
@@ -25,9 +26,9 @@ class SplitTool(BaseTool):
                     name="mode",
                     label="拆分模式",
                     type="enum",
-                    options=["range", "each_page", "chunk"],
+                    options=["range", "each_page", "chunk", "bookmark"],
                     default="each_page",
-                    description="range=按页范围, each_page=每页一个, chunk=按固定页数",
+                    description="range=按页范围, each_page=每页一个, chunk=按固定页数, bookmark=按书签拆分",
                 ),
                 ParamSpec(
                     name="page_range",
@@ -49,7 +50,7 @@ class SplitTool(BaseTool):
 
     def validate(self, params: dict) -> dict:
         mode = params.get("mode", "each_page")
-        if mode not in ("range", "each_page", "chunk"):
+        if mode not in ("range", "each_page", "chunk", "bookmark"):
             raise ToolError(ErrorCode.INVALID_PARAMS, f"Invalid split mode: {mode}")
         return {
             "mode": mode,
@@ -102,8 +103,67 @@ class SplitTool(BaseTool):
                     out.save(out_path)
                     output_files.append(out_path)
 
+            elif mode == "bookmark":
+                bookmarks = _collect_outline_splits(src)
+                if not bookmarks:
+                    raise ToolError(ErrorCode.INVALID_PARAMS, "No usable bookmarks found for split")
+                for split_index, (title, start_page, end_page) in enumerate(bookmarks, start=1):
+                    out = pikepdf.Pdf.new()
+                    for i in range(start_page, end_page + 1):
+                        out.pages.append(src.pages[i])
+                    safe_title = _slugify(title) or f"bookmark_{split_index:04d}"
+                    out_path = workdir / f"{split_index:04d}_{safe_title}.pdf"
+                    out.save(out_path)
+                    output_files.append(out_path)
+                    if reporter:
+                        reporter(int(split_index / len(bookmarks) * 100))
+
         return ToolResult(
             output_files=output_files,
             meta={"total_pages": total, "output_count": len(output_files)},
             log=f"Split {total} pages into {len(output_files)} files ({params['mode']})",
         )
+
+
+def _collect_outline_splits(pdf: pikepdf.Pdf) -> list[tuple[str, int, int]]:
+    page_map = {page.obj.objgen: index for index, page in enumerate(pdf.pages)}
+    points: list[tuple[str, int]] = []
+    with pdf.open_outline() as outline:
+        _walk_outline(outline.root, page_map, points)
+    deduped: list[tuple[str, int]] = []
+    seen_pages: set[int] = set()
+    for title, page_index in sorted(points, key=lambda item: item[1]):
+        if page_index in seen_pages:
+            continue
+        seen_pages.add(page_index)
+        deduped.append((title, page_index))
+    splits: list[tuple[str, int, int]] = []
+    for index, (title, start_page) in enumerate(deduped):
+        end_page = (deduped[index + 1][1] - 1) if index + 1 < len(deduped) else len(pdf.pages) - 1
+        splits.append((title, start_page, end_page))
+    return splits
+
+
+def _walk_outline(items, page_map: dict[tuple[int, int], int], points: list[tuple[str, int]]) -> None:
+    for item in items:
+        page_index = _outline_page_index(item, page_map)
+        if page_index is not None:
+            points.append((item.title or f"bookmark_{page_index + 1}", page_index))
+        if item.children:
+            _walk_outline(item.children, page_map, points)
+
+
+def _outline_page_index(item, page_map: dict[tuple[int, int], int]) -> int | None:
+    destination = getattr(item, "destination", None)
+    if isinstance(destination, int):
+        return destination
+    if isinstance(destination, pikepdf.Array) and destination:
+        target = destination[0]
+        objgen = getattr(target, "objgen", None)
+        if objgen is not None:
+            return page_map.get(objgen)
+    return None
+
+
+def _slugify(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_").lower()

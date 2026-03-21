@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pikepdf
@@ -32,6 +33,15 @@ def _get_form_fields(pdf: pikepdf.Pdf) -> dict[str, str]:
         except Exception:
             pass
     return fields
+
+
+def _flatten_pdf(source_path: Path, output_path: Path) -> None:
+    from pdf_agent.tools._builtins.flatten import FlattenTool
+
+    result = FlattenTool().run([source_path], {}, output_path.parent)
+    flattened_path = result.output_files[0]
+    if flattened_path != output_path:
+        shutil.move(flattened_path, output_path)
 
 
 class FormFillTool(BaseTool):
@@ -76,7 +86,9 @@ class FormFillTool(BaseTool):
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
         params = self.validate(params)
+        workdir.mkdir(parents=True, exist_ok=True)
         output_path = workdir / "filled.pdf"
+        intermediate_path = workdir / "filled_intermediate.pdf"
 
         with pikepdf.open(inputs[0]) as pdf:
             existing_fields = _get_form_fields(pdf)
@@ -92,25 +104,39 @@ class FormFillTool(BaseTool):
             if not existing_fields:
                 raise ToolError(ErrorCode.INVALID_PARAMS, "This PDF has no AcroForm fields to fill")
 
+            requested_fields = set(params["field_values"].keys())
+            missing_fields = sorted(requested_fields - set(existing_fields.keys()))
+            if missing_fields:
+                raise ToolError(
+                    ErrorCode.INVALID_PARAMS,
+                    f"Unknown form field(s): {', '.join(missing_fields)}",
+                )
+
             # Fill fields
             if Name("/AcroForm") in pdf.Root:
                 acroform = pdf.Root["/AcroForm"]
                 if Name("/Fields") in acroform:
                     for field_ref in acroform["/Fields"]:
+                        field = field_ref
+                        name = str(field.get("/T", "")).strip("()")
+                        if name not in params["field_values"]:
+                            continue
                         try:
-                            field = field_ref
-                            name = str(field.get("/T", "")).strip("()")
-                            if name in params["field_values"]:
-                                field["/V"] = String(params["field_values"][name])
-                                field["/AP"] = pikepdf.Dictionary()  # reset appearance
-                        except Exception:
-                            pass
+                            field["/V"] = String(params["field_values"][name])
+                            field["/AP"] = pikepdf.Dictionary()  # reset appearance
+                        except Exception as exc:
+                            raise ToolError(
+                                ErrorCode.OUTPUT_GENERATION_FAILED,
+                                f"Failed to fill form field '{name}'",
+                            ) from exc
 
-                if params["flatten"]:
-                    # Remove NeedAppearances flag and lock fields
-                    acroform["/NeedAppearances"] = pikepdf.Boolean(False)
+                acroform["/NeedAppearances"] = pikepdf.Boolean(False)
 
-            pdf.save(output_path)
+            pdf.save(intermediate_path if params["flatten"] else output_path)
+
+        if params["flatten"]:
+            _flatten_pdf(intermediate_path, output_path)
+            intermediate_path.unlink(missing_ok=True)
 
         filled = list(params["field_values"].keys())
         return ToolResult(

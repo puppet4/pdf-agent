@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
-from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, ToolError
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
@@ -59,12 +58,7 @@ class PdfToHtmlTool(BaseTool):
         if params["single_page"]:
             cmd.append("-s")  # single HTML file
         cmd += [str(pdf_path), str(output_stem)]
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, timeout=settings.external_cmd_timeout_sec)
-        except subprocess.TimeoutExpired:
-            raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, "pdftohtml timed out")
-        except subprocess.CalledProcessError as exc:
-            raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"pdftohtml failed: {exc.stderr.decode(errors='replace')}")
+        run_command(cmd)
 
         # Find output file
         html_files = list(workdir.glob("*.html")) + list(workdir.glob("*.htm"))
@@ -82,15 +76,7 @@ class PdfToHtmlTool(BaseTool):
     def _run_libreoffice(self, lo_bin: str, pdf_path: Path, workdir: Path, reporter) -> ToolResult:
         if reporter:
             reporter(10, "Converting with LibreOffice...")
-        try:
-            subprocess.run(
-                [lo_bin, "--headless", "--convert-to", "html", "--outdir", str(workdir), str(pdf_path)],
-                check=True, capture_output=True, timeout=settings.external_cmd_timeout_sec,
-            )
-        except subprocess.TimeoutExpired:
-            raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, "LibreOffice timed out")
-        except subprocess.CalledProcessError as exc:
-            raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"LibreOffice failed: {exc.stderr.decode(errors='replace')}")
+        run_command([lo_bin, "--headless", "--convert-to", "html", "--outdir", str(workdir), str(pdf_path)])
 
         output_path = workdir / (pdf_path.stem + ".html")
         if not output_path.exists():

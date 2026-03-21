@@ -1,4 +1,4 @@
-"""Signature info tool — detect and report digital signatures in a PDF."""
+"""Signature info tool — detect and verify digital signatures in a PDF when possible."""
 from __future__ import annotations
 
 import json
@@ -53,6 +53,7 @@ class SignatureInfoTool(BaseTool):
                     except Exception:
                         pass
 
+        verification = _verify_signatures(inputs[0])
         has_signatures = len(signatures) > 0
         summary = f"Found {len(signatures)} digital signature(s)" if has_signatures else "No digital signatures found"
 
@@ -62,6 +63,33 @@ class SignatureInfoTool(BaseTool):
                 "has_signatures": has_signatures,
                 "signature_count": len(signatures),
                 "signatures": signatures,
+                "verification": verification,
             },
-            log=f"{summary}. Details: {json.dumps(signatures, ensure_ascii=False, default=str)}",
+            log=f"{summary}. Details: {json.dumps({'signatures': signatures, 'verification': verification}, ensure_ascii=False, default=str)}",
         )
+
+
+def _verify_signatures(pdf_path: Path) -> list[dict]:
+    try:
+        from pyhanko.pdf_utils.reader import PdfFileReader
+        from pyhanko.sign.validation import ValidationContext, validate_pdf_signature
+    except Exception:
+        return []
+
+    results: list[dict] = []
+    try:
+        with pdf_path.open("rb") as fh:
+            reader = PdfFileReader(fh)
+            for embedded_sig in getattr(reader, "embedded_signatures", []):
+                status = validate_pdf_signature(embedded_sig, ValidationContext(allow_fetching=False))
+                results.append(
+                    {
+                        "field_name": getattr(embedded_sig, "field_name", ""),
+                        "intact": bool(getattr(status, "intact", False)),
+                        "trusted": bool(getattr(status, "trusted", False)),
+                        "bottom_line": str(getattr(status, "bottom_line", "")),
+                    }
+                )
+    except Exception:
+        return []
+    return results

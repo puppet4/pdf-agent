@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
-from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, ToolError
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
@@ -50,20 +49,7 @@ class PdfToWordTool(BaseTool):
             str(inputs[0]),
         ]
 
-        try:
-            subprocess.run(
-                cmd,
-                check=True,
-                capture_output=True,
-                timeout=settings.external_cmd_timeout_sec,
-            )
-        except subprocess.TimeoutExpired:
-            raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, "LibreOffice conversion timed out")
-        except subprocess.CalledProcessError as exc:
-            raise ToolError(
-                ErrorCode.ENGINE_EXEC_FAILED,
-                f"LibreOffice failed: {exc.stderr.decode(errors='replace')}",
-            )
+        run_command(cmd)
 
         # LibreOffice outputs file with same stem + .docx
         output_path = workdir / (inputs[0].stem + ".docx")

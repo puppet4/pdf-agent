@@ -8,6 +8,7 @@ import pikepdf
 
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
+from pdf_agent.tools._builtins.pdf_to_text import _extract_page_text
 
 
 class MetadataInfoTool(BaseTool):
@@ -42,16 +43,25 @@ class MetadataInfoTool(BaseTool):
             pages_info = []
             for i, page in enumerate(pdf.pages):
                 mbox = page.mediabox
+                page_text = _extract_page_text(page).strip()
                 pages_info.append({
                     "index": i + 1,
                     "width": float(mbox[2] - mbox[0]),
                     "height": float(mbox[3] - mbox[1]),
+                    "has_text": bool(page_text),
+                    "text_chars": len(page_text),
                 })
+
+            pages_with_text = sum(1 for page in pages_info if page["has_text"])
+            has_text_layer = pages_with_text > 0
 
             result_data = {
                 "page_count": len(pdf.pages),
                 "pdf_version": str(pdf.pdf_version),
                 "is_encrypted": pdf.is_encrypted,
+                "has_text_layer": has_text_layer,
+                "is_scanned": not has_text_layer,
+                "pages_with_text": pages_with_text,
                 "docinfo": info,
                 "pages": pages_info,
             }

@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
-from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, ToolError
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
@@ -34,15 +33,7 @@ class PdfToExcelTool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "LibreOffice is not installed")
         if reporter:
             reporter(10, "Starting conversion...")
-        try:
-            subprocess.run(
-                [lo_bin, "--headless", "--convert-to", "xlsx", "--outdir", str(workdir), str(inputs[0])],
-                check=True, capture_output=True, timeout=settings.external_cmd_timeout_sec,
-            )
-        except subprocess.TimeoutExpired:
-            raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, "LibreOffice timed out")
-        except subprocess.CalledProcessError as exc:
-            raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"LibreOffice failed: {exc.stderr.decode(errors='replace')}")
+        run_command([lo_bin, "--headless", "--convert-to", "xlsx", "--outdir", str(workdir), str(inputs[0])])
         output_path = workdir / (inputs[0].stem + ".xlsx")
         if not output_path.exists():
             raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, "No .xlsx file produced")
@@ -74,15 +65,7 @@ class PdfToPptTool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "LibreOffice is not installed")
         if reporter:
             reporter(10, "Starting conversion...")
-        try:
-            subprocess.run(
-                [lo_bin, "--headless", "--convert-to", "pptx", "--outdir", str(workdir), str(inputs[0])],
-                check=True, capture_output=True, timeout=settings.external_cmd_timeout_sec,
-            )
-        except subprocess.TimeoutExpired:
-            raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, "LibreOffice timed out")
-        except subprocess.CalledProcessError as exc:
-            raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"LibreOffice failed: {exc.stderr.decode(errors='replace')}")
+        run_command([lo_bin, "--headless", "--convert-to", "pptx", "--outdir", str(workdir), str(inputs[0])])
         output_path = workdir / (inputs[0].stem + ".pptx")
         if not output_path.exists():
             raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, "No .pptx file produced")

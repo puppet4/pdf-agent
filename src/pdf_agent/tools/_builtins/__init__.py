@@ -52,9 +52,15 @@ def get_builtin_tools() -> list[BaseTool]:
     from pdf_agent.tools._builtins.validate import ValidateTool
     from pdf_agent.tools._builtins.auto_rotate import AutoRotateTool
     from pdf_agent.tools._builtins.pages_to_zip import PagesToZipTool
+    from pdf_agent.tools._builtins.add_blank_pages import AddBlankPagesTool
+    from pdf_agent.tools._builtins.booklet import BookletTool
+    from pdf_agent.tools._builtins.office_to_pdf import OfficeToPdfTool
+    from pdf_agent.tools._builtins.extract_images import ExtractImagesTool
+    from pdf_agent.tools._builtins.extract_attachments import ExtractAttachmentsTool
+    from pdf_agent.tools._builtins.redact import RedactTool
 
     return [
-        MergeTool(), SplitTool(), RotateTool(), AutoRotateTool(),
+        MergeTool(), SplitTool(), RotateTool(), AutoRotateTool(), AddBlankPagesTool(), BookletTool(),
         MetadataInfoTool(), SetMetadataTool(), RemoveMetadataTool(),
         ExtractTool(), DeleteTool(), ReorderTool(), ReversePagesTool(),
         EncryptTool(), DecryptTool(),
@@ -62,10 +68,10 @@ def get_builtin_tools() -> list[BaseTool]:
         HeaderFooterTool(), AddPageNumbersTool(), ImagesToPdfTool(),
         BarcodeTool(), PageBorderTool(),
         CompressTool(), RepairTool(), LinearizeTool(), OcrTool(),
-        PdfToImagesTool(), PagesToZipTool(), PdfToWordTool(), PdfToExcelTool(), PdfToPptTool(),
+        PdfToImagesTool(), PagesToZipTool(), PdfToWordTool(), PdfToExcelTool(), PdfToPptTool(), OfficeToPdfTool(),
         PdfToTextTool(), PdfToHtmlTool(), PdfToMarkdownTool(), PdfATool(),
         CropTool(), ResizeTool(), FlattenTool(),
         RemoveBlankPagesTool(), NUpTool(), QrCodeTool(), CompareTool(), TilePagesTool(),
         FormFillTool(), SignatureInfoTool(), SignatureTool(), DeskewTool(),
-        ValidateTool(),
+        ValidateTool(), ExtractImagesTool(), ExtractAttachmentsTool(), RedactTool(),
     ]

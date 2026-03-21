@@ -1,6 +1,7 @@
 """Prometheus metrics collection and /metrics endpoint."""
 from __future__ import annotations
 
+import re
 import time
 
 from fastapi import APIRouter, Request, Response
@@ -17,9 +18,11 @@ class _Metrics:
 
     def __init__(self):
         self.request_count: dict[str, int] = {}        # method:path:status
-        self.request_duration: dict[str, list[float]] = {}  # method:path
+        self.request_duration: dict[str, tuple[int, float]] = {}  # method:path -> (count, total)
         self.tool_count: dict[str, int] = {}            # tool_name
-        self.tool_duration: dict[str, list[float]] = {} # tool_name
+        self.tool_duration: dict[str, tuple[int, float]] = {} # tool_name -> (count, total)
+        self.execution_count: dict[str, int] = {}
+        self.queue_length: dict[str, int] = {}
         self.llm_tokens_in: int = 0
         self.llm_tokens_out: int = 0
 
@@ -27,11 +30,24 @@ class _Metrics:
         key = f'{method}:{path}:{status}'
         self.request_count[key] = self.request_count.get(key, 0) + 1
         dur_key = f'{method}:{path}'
-        self.request_duration.setdefault(dur_key, []).append(duration)
+        count, total = self.request_duration.get(dur_key, (0, 0.0))
+        self.request_duration[dur_key] = (count + 1, total + duration)
 
     def record_tool(self, name: str, duration: float):
         self.tool_count[name] = self.tool_count.get(name, 0) + 1
-        self.tool_duration.setdefault(name, []).append(duration)
+        count, total = self.tool_duration.get(name, (0, 0.0))
+        self.tool_duration[name] = (count + 1, total + duration)
+
+    def record_execution_update(self, *, status: str, queue_name: str, duration: float | None):
+        self.execution_count[status] = self.execution_count.get(status, 0) + 1
+        self.queue_length.setdefault(queue_name, 0)
+        if duration is not None:
+            key = f"duration:{status}"
+            count, total = self.tool_duration.get(key, (0, 0.0))
+            self.tool_duration[key] = (count + 1, total + duration)
+
+    def set_queue_length(self, queue_name: str, length: int):
+        self.queue_length[queue_name] = max(0, length)
 
     def record_llm_tokens(self, input_tokens: int, output_tokens: int):
         self.llm_tokens_in += input_tokens
@@ -50,10 +66,8 @@ class _Metrics:
         # Request duration
         lines.append("# HELP pdf_agent_http_request_duration_seconds Request duration")
         lines.append("# TYPE pdf_agent_http_request_duration_seconds summary")
-        for key, durations in sorted(self.request_duration.items()):
+        for key, (count, total) in sorted(self.request_duration.items()):
             method, path = key.split(":", 1)
-            total = sum(durations)
-            count = len(durations)
             lines.append(f'pdf_agent_http_request_duration_seconds_sum{{method="{method}",path="{path}"}} {total:.4f}')
             lines.append(f'pdf_agent_http_request_duration_seconds_count{{method="{method}",path="{path}"}} {count}')
 
@@ -66,11 +80,19 @@ class _Metrics:
         # Tool duration
         lines.append("# HELP pdf_agent_tool_duration_seconds Tool execution duration")
         lines.append("# TYPE pdf_agent_tool_duration_seconds summary")
-        for name, durations in sorted(self.tool_duration.items()):
-            total = sum(durations)
-            count = len(durations)
+        for name, (count, total) in sorted(self.tool_duration.items()):
             lines.append(f'pdf_agent_tool_duration_seconds_sum{{tool="{name}"}} {total:.4f}')
             lines.append(f'pdf_agent_tool_duration_seconds_count{{tool="{name}"}} {count}')
+
+        lines.append("# HELP pdf_agent_executions_total Execution status transitions")
+        lines.append("# TYPE pdf_agent_executions_total counter")
+        for status, count in sorted(self.execution_count.items()):
+            lines.append(f'pdf_agent_executions_total{{status="{status}"}} {count}')
+
+        lines.append("# HELP pdf_agent_queue_length Current queue length")
+        lines.append("# TYPE pdf_agent_queue_length gauge")
+        for queue_name, count in sorted(self.queue_length.items()):
+            lines.append(f'pdf_agent_queue_length{{queue="{queue_name}"}} {count}')
 
         # LLM tokens
         lines.append("# HELP pdf_agent_llm_tokens_total Total LLM tokens")
@@ -83,6 +105,23 @@ class _Metrics:
 
 
 metrics = _Metrics()
+
+_PATH_NORMALIZERS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"^/api/files/[^/]+/pages/\d+$"), "/api/files/{file_id}/pages/{page}"),
+    (re.compile(r"^/api/files/[^/]+/(download|thumbnail)$"), "/api/files/{file_id}/{action}"),
+    (re.compile(r"^/api/files/[^/]+$"), "/api/files/{file_id}"),
+    (re.compile(r"^/api/agent/threads/[^/]+/files/.+$"), "/api/agent/threads/{thread_id}/files/{file_path}"),
+    (re.compile(r"^/api/agent/threads/[^/]+$"), "/api/agent/threads/{thread_id}"),
+]
+
+
+def _normalize_metric_path(path: str, route_path: str | None = None) -> str:
+    if route_path:
+        return route_path
+    for pattern, replacement in _PATH_NORMALIZERS:
+        if pattern.match(path):
+            return replacement
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -97,12 +136,9 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         duration = time.time() - start
 
-        # Normalize path to avoid cardinality explosion
-        path = request.url.path
-        if "/threads/" in path:
-            path = "/api/agent/threads/{id}"
-        elif "/files/" in path and "/api/files/" in path:
-            path = "/api/files/{id}"
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", None)
+        path = _normalize_metric_path(request.url.path, route_path)
 
         metrics.record_request(request.method, path, response.status_code, duration)
         return response

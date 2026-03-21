@@ -2,34 +2,44 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
 import pikepdf
 
 from pdf_agent.core import ErrorCode, ToolError
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
 
-def _detect_rotation(image_path: Path) -> int:
-    """Use tesseract OSD to detect required rotation (degrees)."""
+def _detect_rotation(image_path: Path) -> tuple[int, float | None]:
+    """Use tesseract OSD to detect required rotation (degrees, confidence)."""
     tesseract = shutil.which("tesseract")
     if not tesseract:
-        return 0
+        return 0, None
     try:
-        result = subprocess.run(
+        result = run_command(
             [tesseract, str(image_path), "stdout", "--psm", "0", "-l", "osd"],
-            capture_output=True, timeout=30, text=True,
+            check=False,
+            timeout=30,
         )
-        for line in result.stdout.splitlines():
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="replace").strip() or "Tesseract OSD failed"
+            raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, detail)
+        angle = 0
+        confidence = None
+        stdout = result.stdout.decode("utf-8", errors="replace")
+        for line in stdout.splitlines():
             if "Rotate:" in line:
                 angle = int(float(line.split(":")[1].strip()))
-                return angle
-    except Exception:
-        pass
-    return 0
+            elif "Orientation confidence:" in line:
+                confidence = float(line.split(":", 1)[1].strip())
+        return angle, confidence
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"Failed to detect orientation: {exc}") from exc
 
 
 def _render_page_png(pdf_path: Path, page_idx: int, tmpdir: Path) -> Path | None:
@@ -38,11 +48,15 @@ def _render_page_png(pdf_path: Path, page_idx: int, tmpdir: Path) -> Path | None
     if not pdftoppm:
         return None
     out_stem = tmpdir / f"p{page_idx}"
-    subprocess.run(
+    result = run_command(
         [pdftoppm, "-r", "72", "-png", "-f", str(page_idx + 1), "-l", str(page_idx + 1),
          str(pdf_path), str(out_stem)],
-        capture_output=True, timeout=30,
+        check=False,
+        timeout=30,
     )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="ignore").strip() or "pdftoppm failed"
+        raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, detail)
     candidates = list(tmpdir.glob(f"p{page_idx}*.png"))
     return candidates[0] if candidates else None
 
@@ -81,6 +95,7 @@ class AutoRotateTool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "pdftoppm is not installed")
 
         params = self.validate(params)
+        workdir.mkdir(parents=True, exist_ok=True)
         output_path = workdir / "auto_rotated.pdf"
         rotations = []
 
@@ -93,11 +108,13 @@ class AutoRotateTool(BaseTool):
                         reporter(int(i / total * 85), f"Analyzing page {i+1}/{total}")
                     img = _render_page_png(inputs[0], i, tmpdir)
                     if not img:
+                        raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, f"Failed to render page {i + 1} for analysis")
+                    angle, confidence = _detect_rotation(img)
+                    if confidence is not None and confidence < params["min_confidence"]:
                         continue
-                    angle = _detect_rotation(img)
                     if angle != 0:
                         pdf.pages[i].rotate(angle, relative=True)
-                        rotations.append({"page": i + 1, "angle": angle})
+                        rotations.append({"page": i + 1, "angle": angle, "confidence": confidence})
                 if reporter:
                     reporter(95, "Saving...")
                 pdf.save(output_path)

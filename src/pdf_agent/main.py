@@ -5,34 +5,54 @@ import asyncio
 import logging
 import logging.config
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from psycopg_pool import AsyncConnectionPool
+from sqlalchemy import select
 
 from pdf_agent.config import settings
 from pdf_agent.core import PDFAgentError
 from pdf_agent.api.router import api_router
-from pdf_agent.api.middleware import ApiKeyMiddleware, RateLimitMiddleware, RequestIdMiddleware
+from pdf_agent.api.middleware import (
+    ApiKeyMiddleware,
+    RateLimitMiddleware,
+    RequestIdMiddleware,
+    get_request_id,
+)
+from pdf_agent.db import async_session_factory
+from pdf_agent.db.models import ExecutionRecord, FileRecord
 from pdf_agent.tools.registry import load_builtin_tools, registry
+
+
+class _RequestIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = getattr(record, "request_id", get_request_id())
+        return True
 
 
 def _configure_logging():
     """Configure JSON structured logging with request_id support."""
     log_format = (
         '{"time": "%(asctime)s", "level": "%(levelname)s", '
-        '"name": "%(name)s", "message": %(message)r}'
+        '"name": "%(name)s", "request_id": "%(request_id)s", "message": %(message)r}'
         if not settings.debug
-        else "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+        else "%(asctime)s %(levelname)s [%(name)s] [request_id=%(request_id)s] %(message)s"
     )
     logging.basicConfig(
         level=logging.DEBUG if settings.debug else logging.INFO,
         format=log_format,
+        force=True,
     )
+    request_id_filter = _RequestIdFilter()
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(request_id_filter)
 
 
 _configure_logging()
@@ -82,19 +102,118 @@ async def _cleanup_expired_threads_with_checkpointer(
     return removed
 
 
+async def _cleanup_upload_records(upload_ids: list[str]) -> int:
+    """Delete FileRecord rows for upload directories already removed from disk."""
+    parsed_ids: list[uuid.UUID] = []
+    for upload_id in upload_ids:
+        try:
+            parsed_ids.append(uuid.UUID(upload_id))
+        except ValueError:
+            continue
+    if not parsed_ids:
+        return 0
+
+    async with async_session_factory() as session:
+        result = await session.execute(select(FileRecord).where(FileRecord.id.in_(parsed_ids)))
+        records = result.scalars().all()
+        for record in records:
+            await session.delete(record)
+        await session.commit()
+        return len(records)
+
+
+async def _cleanup_expired_executions() -> int:
+    from pdf_agent.storage import storage
+
+    expired_execution_ids = storage.list_expired_executions()
+    removed = 0
+    if expired_execution_ids:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(ExecutionRecord).where(
+                    ExecutionRecord.id.in_([uuid.UUID(execution_id) for execution_id in expired_execution_ids if _is_uuid(execution_id)])
+                )
+            )
+            for execution in result.scalars().all():
+                await session.delete(execution)
+                removed += 1
+            await session.commit()
+        for execution_id in expired_execution_ids:
+            storage.cleanup_execution(execution_id)
+    return removed
+
+
+async def _cleanup_orphan_uploads() -> int:
+    from pdf_agent.storage import storage
+
+    async with async_session_factory() as session:
+        result = await session.execute(select(ExecutionRecord.plan_json))
+        referenced: set[str] = set()
+        for plan_json in result.scalars().all():
+            if not isinstance(plan_json, dict):
+                continue
+            for step in plan_json.get("steps", []):
+                for input_ref in step.get("inputs", []):
+                    if input_ref.get("type") == "file" and input_ref.get("file_id"):
+                        referenced.add(str(input_ref["file_id"]))
+
+        result = await session.execute(select(FileRecord))
+        removed_ids: list[str] = []
+        for record in result.scalars().all():
+            if str(record.id) in referenced:
+                continue
+            if _is_path_stale(Path(record.storage_path)):
+                removed_ids.append(str(record.id))
+                await session.delete(record)
+        await session.commit()
+
+    for upload_id in removed_ids:
+        upload_dir = settings.upload_dir / upload_id
+        if upload_dir.exists():
+            import shutil
+            shutil.rmtree(upload_dir, ignore_errors=True)
+    return len(removed_ids)
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_path_stale(path: Path) -> bool:
+    try:
+        return path.exists() and path.stat().st_mtime < (time.time() - settings.job_ttl_hours * 3600)
+    except Exception:
+        return False
+
+
 async def _cleanup_loop(app: FastAPI):
-    """Periodically clean up expired thread workdirs and uploaded files."""
+    """Periodically clean up expired executions, orphan uploads, and stale thread state."""
     from pdf_agent.storage import storage
 
     while True:
         await asyncio.sleep(3600)  # every hour
         try:
+            removed_executions = await _cleanup_expired_executions()
+            removed_orphans = await _cleanup_orphan_uploads()
             removed_threads = await _cleanup_expired_threads_with_checkpointer(
                 getattr(app.state, "checkpointer", None)
             )
-            removed_uploads = storage.cleanup_expired_uploads()
-            if removed_threads or removed_uploads:
-                logger.info("Cleaned up %d thread(s), %d upload(s)", removed_threads, removed_uploads)
+            removed_upload_ids = storage.cleanup_expired_uploads()
+            removed_uploads = await _cleanup_upload_records(removed_upload_ids)
+            trimmed = storage.trim_storage_lru()
+            if removed_executions or removed_orphans or removed_threads or removed_uploads or trimmed:
+                logger.info(
+                    "Cleaned up %d execution(s), %d orphan upload(s), %d thread(s), %d upload(s), trimmed %d dir(s)",
+                    removed_executions,
+                    removed_orphans,
+                    removed_threads,
+                    removed_uploads,
+                    trimmed,
+                )
         except Exception:
             logger.exception("Cleanup failed")
 
@@ -138,10 +257,19 @@ async def lifespan(app: FastAPI):
 
     # Run initial cleanup
     from pdf_agent.storage import storage
+    await _cleanup_expired_executions()
+    await _cleanup_orphan_uploads()
     expired_thread_ids = storage.list_expired_threads()
     removed = await _cleanup_expired_threads_with_checkpointer(None, thread_ids=expired_thread_ids)
     if removed:
         logger.info("Startup cleanup: removed %d expired thread(s)", removed)
+    removed_upload_ids = storage.cleanup_expired_uploads()
+    removed_uploads = await _cleanup_upload_records(removed_upload_ids)
+    if removed_uploads:
+        logger.info("Startup cleanup: removed %d expired upload(s)", removed_uploads)
+    trimmed = storage.trim_storage_lru()
+    if trimmed:
+        logger.info("Startup cleanup: trimmed %d old storage dir(s)", trimmed)
 
     app.state.graph = None
     app.state.pool = None
@@ -236,7 +364,7 @@ app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
-    allow_credentials=True,
+    allow_credentials=settings.cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -248,6 +376,12 @@ app.include_router(api_router)
 _static_dir = Path(__file__).parent / "static"
 if _static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(_static_dir), html=True), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def frontend_index():
+    index_path = _static_dir / "index.html"
+    return FileResponse(index_path)
 
 
 @app.exception_handler(PDFAgentError)

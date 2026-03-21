@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
-from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, ToolError
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
@@ -37,15 +36,7 @@ class LinearizeTool(BaseTool):
         if reporter:
             reporter(10, "Linearizing with qpdf...")
 
-        try:
-            subprocess.run(
-                [qpdf, "--linearize", str(inputs[0]), str(output_path)],
-                check=True, capture_output=True, timeout=settings.external_cmd_timeout_sec,
-            )
-        except subprocess.TimeoutExpired:
-            raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, "qpdf linearization timed out")
-        except subprocess.CalledProcessError as exc:
-            raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"qpdf failed: {exc.stderr.decode(errors='replace')}")
+        run_command([qpdf, "--linearize", str(inputs[0]), str(output_path)])
 
         src_size = inputs[0].stat().st_size
         out_size = output_path.stat().st_size

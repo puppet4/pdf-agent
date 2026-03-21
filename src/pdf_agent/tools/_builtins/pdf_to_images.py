@@ -2,15 +2,14 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
 import pikepdf
 
-from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.core.page_range import parse_page_range
+from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 
@@ -132,17 +131,7 @@ class PdfToImagesTool(BaseTool):
             str(output_prefix),
         ]
 
-        try:
-            subprocess.run(
-                cmd,
-                check=True,
-                capture_output=True,
-                timeout=settings.external_cmd_timeout_sec,
-            )
-        except subprocess.TimeoutExpired:
-            raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, "pdftoppm conversion timed out")
-        except subprocess.CalledProcessError as exc:
-            raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"pdftoppm failed: {exc.stderr.decode(errors='replace')}")
+        run_command(cmd)
 
         # Collect output files (pdftoppm names them: page-01.png, page-02.png, ...)
         ext = fmt if fmt != "jpeg" else "jpg"
