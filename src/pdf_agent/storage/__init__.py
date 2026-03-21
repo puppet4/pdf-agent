@@ -64,11 +64,6 @@ class LocalStorage:
         if thread_dir.exists():
             shutil.rmtree(thread_dir)
 
-    def cleanup_execution(self, execution_id: str) -> None:
-        execution_dir = settings.executions_dir / execution_id
-        if execution_dir.exists():
-            shutil.rmtree(execution_dir)
-
     def list_expired_threads(self) -> list[str]:
         """Return thread ids whose workdirs are older than thread_ttl_hours."""
         threads_dir = settings.threads_dir
@@ -120,22 +115,6 @@ class LocalStorage:
                 logger.warning("Failed to clean up upload: %s", entry.name)
         return removed
 
-    def list_expired_executions(self) -> list[str]:
-        executions_dir = settings.executions_dir
-        if not executions_dir.exists():
-            return []
-        cutoff = time.time() - settings.job_ttl_hours * 3600
-        expired: list[str] = []
-        for entry in executions_dir.iterdir():
-            if not entry.is_dir():
-                continue
-            try:
-                if entry.stat().st_mtime < cutoff:
-                    expired.append(entry.name)
-            except OSError:
-                logger.warning("Failed to inspect execution workdir: %s", entry.name)
-        return expired
-
     def dir_size_bytes(self, root: Path | None = None) -> int:
         total = 0
         base = root or settings.data_dir
@@ -153,7 +132,7 @@ class LocalStorage:
         return settings.max_storage_gb * 1024 * 1024 * 1024
 
     def trim_storage_lru(self) -> int:
-        """Delete oldest execution dirs first until under the configured storage limit."""
+        """Delete oldest upload/thread dirs first until under the configured storage limit."""
         limit = self.storage_limit_bytes()
         current = self.dir_size_bytes()
         if current <= limit:
@@ -161,7 +140,7 @@ class LocalStorage:
 
         removed = 0
         candidates = []
-        for root in (settings.executions_dir, settings.upload_dir):
+        for root in (settings.threads_dir, settings.upload_dir):
             if not root.exists():
                 continue
             for entry in root.iterdir():

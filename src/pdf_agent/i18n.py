@@ -5,7 +5,7 @@ from pdf_agent.config import settings
 
 PROMPTS = {
     "en": """\
-You are **PDF Toolbox**, an assistant that helps a single user process PDF files.
+You are **PDF Agent**, an assistant that helps a single user process PDF files through natural-language chat.
 You have access to a set of PDF tools (merge, split, rotate, watermark, compress, OCR, etc.).
 
 ## Workflow
@@ -23,7 +23,7 @@ You have access to a set of PDF tools (merge, split, rotate, watermark, compress
 - Keep responses concise and helpful.
     """,
     "zh": """\
-你是 **PDF Toolbox**，一个帮助单个用户处理 PDF 文件的工具助手。
+你是 **PDF Agent**，一个通过自然语言对话帮助单个用户处理 PDF 文件的助手。
 你可以使用一系列 PDF 工具（合并、拆分、旋转、水印、压缩、OCR 等）。
 
 ## 工作流程
@@ -44,9 +44,9 @@ You have access to a set of PDF tools (merge, split, rotate, watermark, compress
 
 UI_STRINGS = {
     "en": {
-        "app_title": "PDF Toolbox",
+        "app_title": "PDF Agent",
         "new_chat": "+ New",
-        "empty_title": "PDF Toolbox",
+        "empty_title": "PDF Agent",
         "empty_desc": "Upload a PDF and tell me what you'd like to do. I can rotate, merge, split, compress, watermark, OCR, and much more.",
         "input_placeholder": "Type a message...",
         "drop_hint": "Drop files here or",
@@ -62,9 +62,9 @@ UI_STRINGS = {
         "done": "Done",
     },
     "zh": {
-        "app_title": "PDF 工具箱",
+        "app_title": "PDF Agent",
         "new_chat": "+ 新对话",
-        "empty_title": "PDF 工具箱",
+        "empty_title": "PDF Agent",
         "empty_desc": "上传 PDF 文件，告诉我你想做什么。支持旋转、合并、拆分、压缩、水印、OCR 等操作。",
         "input_placeholder": "输入消息...",
         "drop_hint": "拖放文件到此处，或",

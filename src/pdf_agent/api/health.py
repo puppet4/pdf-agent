@@ -7,7 +7,6 @@ from sqlalchemy import text
 
 from pdf_agent.config import settings
 from pdf_agent.db import async_session_factory
-from pdf_agent.execution_queue import get_worker_state
 
 router = APIRouter(tags=["health"])
 
@@ -40,7 +39,7 @@ async def healthz(request: Request):
     # Tool count
     from pdf_agent.tools.registry import registry
     checks["tools_loaded"] = len(registry)
-    checks.update(get_worker_state())
+    checks["runtime"] = "single-process"
 
     status_code = 200 if checks["status"] == "ok" else 503
     return JSONResponse(content=checks, status_code=status_code)

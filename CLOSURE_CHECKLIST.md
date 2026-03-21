@@ -2,26 +2,22 @@
 
 ## Current Status
 
-- Runtime architecture is frozen on `ExecutionRecord + LangChain/LangGraph + execution runtime`.
-- Active runtime paths have been aligned to `execution` terminology.
-- Shared external command execution and cancellation path is in place.
-- Reduced smoke and acceptance suite is green: `28 passed`.
+- Runtime architecture is frozen on `FastAPI + LangChain/LangGraph + local storage`.
+- Product surface is conversation-first and no longer exposes legacy execution management HTTP entrypoints.
+- Reduced smoke-oriented suite is green: `16 passed`.
 
 ## Recommended Commit Split
 
-### 1. Runtime / Execution Backbone
+### 1. Runtime / Conversation Backbone
 
 Scope:
-- Replace the old jobs backbone with executions
-- Fix cancel semantics, queue accounting, and subprocess tracking
-- Align runtime metrics and file preview paths to the shared execution model
+- Remove legacy queue/worker/runtime layers
+- Keep the chat-first conversation flow stable
+- Align health, cleanup, and storage behavior to the simplified single-process model
 
 Primary files:
-- `src/pdf_agent/api/executions.py`
-- `src/pdf_agent/execution_queue.py`
 - `src/pdf_agent/external_commands.py`
 - `src/pdf_agent/agent/tools_adapter.py`
-- `src/pdf_agent/api/tools.py`
 - `src/pdf_agent/api/files.py`
 - `src/pdf_agent/api/metrics.py`
 - `src/pdf_agent/services/__init__.py`
@@ -29,13 +25,13 @@ Primary files:
 - `src/pdf_agent/main.py`
 - `src/pdf_agent/api/router.py`
 - `src/pdf_agent/api/agent.py`
-- `src/pdf_agent/api/workflows.py`
 - `src/pdf_agent/config.py`
 - `src/pdf_agent/storage/__init__.py`
-- `src/pdf_agent/worker.py`
+- `src/pdf_agent/db/models.py`
+- `src/pdf_agent/api/health.py`
 
 Also include:
-- deletion of legacy paths such as `src/pdf_agent/api/jobs.py`, `src/pdf_agent/static/app.js`, `src/pdf_agent/static/tools.html`, `src/pdf_agent/webhook.py`
+- deletion of legacy paths such as `src/pdf_agent/api/jobs.py`, `src/pdf_agent/api/tools.py`, `src/pdf_agent/api/workflows.py`, `src/pdf_agent/api/executions.py`, `src/pdf_agent/execution_queue.py`, `src/pdf_agent/worker.py`, `src/pdf_agent/static/app.js`, `src/pdf_agent/static/tools.html`, `src/pdf_agent/webhook.py`
 
 ### 2. Tool Runtime Alignment
 
@@ -70,7 +66,8 @@ Optional to include in the same commit if desired:
 ### 3. Frontend / Docs / Smoke Acceptance
 
 Scope:
-- Align the React task center to executions
+- Collapse the product surface into conversation-first PDF editing
+- Remove legacy manual tool/workflow/execution HTTP entrypoints
 - Freeze the design doc on the final target architecture
 - Keep only smoke-oriented tests plus key runtime acceptance coverage
 
@@ -80,7 +77,6 @@ Primary files:
 - `PDF-Agent系统设计.md`
 - `tests/test_smoke_core.py`
 - `tests/test_smoke_tools.py`
-- `tests/test_executions_api.py`
 
 Also include:
 - deletion of the old detailed regression tests now intentionally removed from the suite
@@ -91,12 +87,12 @@ Run before any commit:
 
 ```bash
 git status --short
-python -m py_compile src/pdf_agent/agent/tools_adapter.py tests/test_executions_api.py tests/test_smoke_core.py
+python -m py_compile src/pdf_agent/api/router.py src/pdf_agent/api/agent.py src/pdf_agent/main.py tests/test_smoke_core.py
 PYTHONPATH=src .venv/bin/python -m pytest tests -q
 ```
 
 Expected current result:
-- `PYTHONPATH=src .venv/bin/python -m pytest tests -q` -> `28 passed`
+- `PYTHONPATH=src .venv/bin/python -m pytest tests -q` -> `16 passed`
 
 ## Git Risks To Check Manually
 
@@ -107,11 +103,10 @@ Expected current result:
 ## Manual Acceptance Checklist
 
 - Upload a PDF from the frontend
-- Run one single-input tool from the tool form
-- Run one multi-input tool such as `merge`
-- Confirm agent plan -> execution creation works
+- Send one natural-language request from the main chat flow
+- Send one follow-up instruction in the same conversation
 - Start a long-running execution and cancel it
-- Verify task-center status, result download, output download, and inline error display
+- Verify conversation output, result download, output download, and inline error display
 
 ## Freeze Rules
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E2E validation script for PDF Toolbox.
+# E2E validation script for PDF Agent.
 # Prerequisites: docker compose up -d, OPENAI_API_KEY set.
 #
 # Usage:
@@ -12,7 +12,7 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://localhost:8000}"
 TIMEOUT=30
 
-echo "=== PDF Toolbox E2E Validation ==="
+echo "=== PDF Agent Conversation E2E Validation ==="
 
 # 1. Health check
 echo -n "[1/5] Health check... "
@@ -24,18 +24,8 @@ else
     exit 1
 fi
 
-# 2. List tools
-echo -n "[2/5] Tool listing... "
-TOOL_COUNT=$(curl -s "$BASE_URL/api/tools" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['tools']))")
-if [ "$TOOL_COUNT" -ge 20 ]; then
-    echo "OK ($TOOL_COUNT tools)"
-else
-    echo "FAIL (only $TOOL_COUNT tools)"
-    exit 1
-fi
-
-# 3. Upload a test PDF
-echo -n "[3/5] File upload... "
+# 2. Upload a test PDF
+echo -n "[2/4] File upload... "
 # Create a minimal PDF
 TMPFILE=$(mktemp /tmp/test_XXXX.pdf)
 python3 -c "
@@ -53,15 +43,15 @@ UPLOAD_RESP=$(curl -s -F "file=@$TMPFILE;type=application/pdf" "$BASE_URL/api/fi
 FILE_ID=$(echo "$UPLOAD_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 echo "OK (file_id=$FILE_ID)"
 
-# 4. Agent chat (SSE stream)
-echo -n "[4/5] Agent chat (SSE)... "
+# 3. Agent chat (SSE stream)
+echo -n "[3/4] Agent chat (SSE)... "
 SSE_OUTPUT=$(curl -s -N --max-time "$TIMEOUT" \
     -H "Content-Type: application/json" \
     -d "{\"message\": \"Please tell me the metadata info of this PDF.\", \"file_ids\": [\"$FILE_ID\"]}" \
     "$BASE_URL/api/agent/chat" 2>&1 || true)
 
 if echo "$SSE_OUTPUT" | grep -q "event: thread"; then
-    echo "OK (received SSE events)"
+    echo "OK (received conversation SSE events)"
 else
     echo "FAIL (no thread event)"
     echo "$SSE_OUTPUT" | head -20
@@ -77,13 +67,16 @@ else
     echo "  -> Warning: stream may not have completed"
 fi
 
-# 5. Check for tool execution
-echo -n "[5/5] Tool execution check... "
+# 4. Check for processing step or completion
+echo -n "[4/4] Processing check... "
 if echo "$SSE_OUTPUT" | grep -q "event: tool_start"; then
     TOOL_NAME=$(echo "$SSE_OUTPUT" | grep "event: tool_start" -A1 | grep "data:" | head -1 | python3 -c "import sys,json; print(json.loads(sys.stdin.readline().replace('data: ',''))['tool'])" 2>/dev/null || echo "unknown")
-    echo "OK (tool=$TOOL_NAME)"
+    echo "OK (step=$TOOL_NAME)"
+elif echo "$SSE_OUTPUT" | grep -q "event: done"; then
+    echo "OK (conversation completed without explicit tool event)"
 else
-    echo "WARN (no tool was called — LLM may have responded without using tools)"
+    echo "FAIL (no completion event)"
+    exit 1
 fi
 
 # Cleanup
@@ -92,6 +85,6 @@ rm -f "$TMPFILE"
 echo ""
 echo "=== E2E Validation Complete ==="
 if [ -n "$THREAD_ID" ]; then
-    echo "Thread ID: $THREAD_ID"
-    echo "List files: curl $BASE_URL/api/agent/threads/$THREAD_ID/files"
+    echo "Conversation ID: $THREAD_ID"
+    echo "List result files: curl $BASE_URL/api/agent/threads/$THREAD_ID/files"
 fi
