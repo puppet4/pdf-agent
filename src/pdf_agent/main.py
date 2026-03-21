@@ -5,7 +5,6 @@ import asyncio
 import logging
 import logging.config
 import os
-import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,7 +26,7 @@ from pdf_agent.api.middleware import (
     get_request_id,
 )
 from pdf_agent.db import async_session_factory
-from pdf_agent.db.models import ExecutionRecord, FileRecord
+from pdf_agent.db.models import FileRecord
 from pdf_agent.tools.registry import load_builtin_tools, registry
 
 
@@ -122,94 +121,22 @@ async def _cleanup_upload_records(upload_ids: list[str]) -> int:
         return len(records)
 
 
-async def _cleanup_expired_executions() -> int:
-    from pdf_agent.storage import storage
-
-    expired_execution_ids = storage.list_expired_executions()
-    removed = 0
-    if expired_execution_ids:
-        async with async_session_factory() as session:
-            result = await session.execute(
-                select(ExecutionRecord).where(
-                    ExecutionRecord.id.in_([uuid.UUID(execution_id) for execution_id in expired_execution_ids if _is_uuid(execution_id)])
-                )
-            )
-            for execution in result.scalars().all():
-                await session.delete(execution)
-                removed += 1
-            await session.commit()
-        for execution_id in expired_execution_ids:
-            storage.cleanup_execution(execution_id)
-    return removed
-
-
-async def _cleanup_orphan_uploads() -> int:
-    from pdf_agent.storage import storage
-
-    async with async_session_factory() as session:
-        result = await session.execute(select(ExecutionRecord.plan_json))
-        referenced: set[str] = set()
-        for plan_json in result.scalars().all():
-            if not isinstance(plan_json, dict):
-                continue
-            for step in plan_json.get("steps", []):
-                for input_ref in step.get("inputs", []):
-                    if input_ref.get("type") == "file" and input_ref.get("file_id"):
-                        referenced.add(str(input_ref["file_id"]))
-
-        result = await session.execute(select(FileRecord))
-        removed_ids: list[str] = []
-        for record in result.scalars().all():
-            if str(record.id) in referenced:
-                continue
-            if _is_path_stale(Path(record.storage_path)):
-                removed_ids.append(str(record.id))
-                await session.delete(record)
-        await session.commit()
-
-    for upload_id in removed_ids:
-        upload_dir = settings.upload_dir / upload_id
-        if upload_dir.exists():
-            import shutil
-            shutil.rmtree(upload_dir, ignore_errors=True)
-    return len(removed_ids)
-
-
-def _is_uuid(value: str) -> bool:
-    try:
-        uuid.UUID(value)
-        return True
-    except ValueError:
-        return False
-
-
-def _is_path_stale(path: Path) -> bool:
-    try:
-        return path.exists() and path.stat().st_mtime < (time.time() - settings.job_ttl_hours * 3600)
-    except Exception:
-        return False
-
-
 async def _cleanup_loop(app: FastAPI):
-    """Periodically clean up expired executions, orphan uploads, and stale thread state."""
+    """Periodically clean up expired uploads, stale thread state, and storage pressure."""
     from pdf_agent.storage import storage
 
     while True:
         await asyncio.sleep(3600)  # every hour
         try:
-            removed_executions = await _cleanup_expired_executions()
-            removed_orphans = await _cleanup_orphan_uploads()
             removed_threads = await _cleanup_expired_threads_with_checkpointer(
                 getattr(app.state, "checkpointer", None)
             )
             removed_upload_ids = storage.cleanup_expired_uploads()
             removed_uploads = await _cleanup_upload_records(removed_upload_ids)
             trimmed = storage.trim_storage_lru()
-            if removed_executions or removed_orphans or removed_threads or removed_uploads or trimmed:
+            if removed_threads or removed_uploads or trimmed:
                 logger.info(
-                    "Cleaned up %d execution(s), %d orphan upload(s), %d thread(s), %d upload(s), trimmed %d dir(s)",
-                    removed_executions,
-                    removed_orphans,
+                    "Cleaned up %d thread(s), %d upload(s), trimmed %d dir(s)",
                     removed_threads,
                     removed_uploads,
                     trimmed,
@@ -257,8 +184,6 @@ async def lifespan(app: FastAPI):
 
     # Run initial cleanup
     from pdf_agent.storage import storage
-    await _cleanup_expired_executions()
-    await _cleanup_orphan_uploads()
     expired_thread_ids = storage.list_expired_threads()
     removed = await _cleanup_expired_threads_with_checkpointer(None, thread_ids=expired_thread_ids)
     if removed:
@@ -348,6 +273,9 @@ app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/docs" if settings.expose_api_docs else None,
+    redoc_url="/redoc" if settings.expose_api_docs else None,
+    openapi_url="/openapi.json" if settings.expose_api_docs else None,
 )
 app.state.graph = None
 app.state.pool = None
@@ -381,7 +309,14 @@ if _static_dir.is_dir():
 @app.get("/", include_in_schema=False)
 async def frontend_index():
     index_path = _static_dir / "index.html"
-    return FileResponse(index_path)
+    return FileResponse(
+        index_path,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.exception_handler(PDFAgentError)
