@@ -1,7 +1,6 @@
 """Metadata info tool - read PDF metadata and statistics."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pikepdf
@@ -66,11 +65,8 @@ class MetadataInfoTool(BaseTool):
                 "pages": pages_info,
             }
 
-        output_path = workdir / "metadata.json"
-        output_path.write_text(json.dumps(result_data, ensure_ascii=False, indent=2))
-
         return ToolResult(
-            output_files=[output_path],
+            output_files=[],
             meta=result_data,
             log=f"Extracted metadata: {result_data['page_count']} pages",
         )

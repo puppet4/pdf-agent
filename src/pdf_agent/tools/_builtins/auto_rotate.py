@@ -11,6 +11,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 def _detect_rotation(image_path: Path) -> tuple[int, float | None]:
@@ -96,7 +97,7 @@ class AutoRotateTool(BaseTool):
 
         params = self.validate(params)
         workdir.mkdir(parents=True, exist_ok=True)
-        output_path = workdir / "auto_rotated.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已自动旋转")
         rotations = []
 
         with tempfile.TemporaryDirectory() as td:

@@ -9,6 +9,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class OcrTool(BaseTool):
@@ -84,7 +85,7 @@ class OcrTool(BaseTool):
         if not ocrmypdf_bin:
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "ocrmypdf is not installed")
 
-        output_path = workdir / "ocr_output.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已OCR")
         src_path = inputs[0]
         sidecar_path = workdir / "ocr_output.txt"
 

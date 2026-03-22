@@ -6,11 +6,13 @@ from pathlib import Path
 
 import pikepdf
 from PIL import Image
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class SignatureTool(BaseTool):
@@ -59,7 +61,6 @@ class SignatureTool(BaseTool):
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "signed.pdf"
 
         # Identify PDF and signature image
         pdf_path = sig_path = cert_path = None
@@ -72,6 +73,7 @@ class SignatureTool(BaseTool):
                 cert_path = p
         if not pdf_path:
             raise ToolError(ErrorCode.INVALID_PARAMS, "No PDF file provided")
+        output_path = workdir / localized_output_name(pdf_path, "已签名")
 
         if params["mode"] == "digital" or cert_path is not None:
             pre_signed_pdf = pdf_path
@@ -125,7 +127,7 @@ class SignatureTool(BaseTool):
             overlay_buf = io.BytesIO()
             c = canvas.Canvas(overlay_buf, pagesize=(pw, ph))
             sig_buf.seek(0)
-            c.drawImage(sig_buf, x, y, width=sw, height=sh, mask="auto")
+            c.drawImage(ImageReader(sig_buf), x, y, width=sw, height=sh, mask="auto")
             c.save()
             overlay_buf.seek(0)
 

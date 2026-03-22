@@ -25,6 +25,7 @@ class TestRepresentativeToolsSmoke:
         result = MergeTool().run([sample_copy, second], {"mode": "interleave"}, merge_dir)
 
         assert result.output_files[0].exists()
+        assert "已合并" in result.output_files[0].name
         with pikepdf.open(result.output_files[0]) as pdf:
             assert len(pdf.pages) == 10
 
@@ -49,6 +50,7 @@ class TestRepresentativeToolsSmoke:
 
         assert len(result.output_files) == 3
         assert all(path.exists() for path in result.output_files)
+        assert all("分块" in path.name for path in result.output_files)
 
     def test_split_supports_bookmark_mode(self, sample_pdf: Path, workdir: Path):
         bookmarked = workdir / "bookmarked.pdf"
@@ -90,7 +92,7 @@ class TestRepresentativeToolsSmoke:
         meta_dir.mkdir(parents=True, exist_ok=True)
         result = MetadataInfoTool().run([sample_pdf], {}, meta_dir)
 
-        assert result.output_files[0].exists()
+        assert result.output_files == []
         assert result.meta["page_count"] == 5
         assert result.meta["has_text_layer"] is True
         assert len(result.meta["pages"]) == 5

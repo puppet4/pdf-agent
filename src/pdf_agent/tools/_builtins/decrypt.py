@@ -8,6 +8,7 @@ import pikepdf
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class DecryptTool(BaseTool):
@@ -45,7 +46,7 @@ class DecryptTool(BaseTool):
         reporter: ProgressReporter | None = None,
     ) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "decrypted.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已解密")
 
         try:
             with pikepdf.open(inputs[0], password=params["password"]) as pdf:

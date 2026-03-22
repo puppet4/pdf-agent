@@ -99,10 +99,6 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if not settings.api_key:
             return await call_next(request)
 
-        path = request.url.path
-        if path.startswith("/static"):
-            return await call_next(request)
-
         provided = request.headers.get("X-API-Key")
         if provided != settings.api_key:
             return JSONResponse(

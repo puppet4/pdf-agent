@@ -31,5 +31,5 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     files: Annotated[list[FileInfo], files_reducer]
     current_files: list[str]  # latest output file paths (replace reducer)
-    thread_workdir: str
+    conversation_workdir: str
     step_counter: int

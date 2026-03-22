@@ -1,4 +1,4 @@
-"""Tracked external command execution for execution cancellation support."""
+"""Tracked external command runs for conversation-run cancellation support."""
 from __future__ import annotations
 
 import contextvars
@@ -16,34 +16,34 @@ from pdf_agent.core import ErrorCode, ToolError
 
 logger = logging.getLogger(__name__)
 
-_job_processes: dict[str, set[subprocess.Popen[bytes]]] = defaultdict(set)
+_conversation_processes: dict[str, set[subprocess.Popen[bytes]]] = defaultdict(set)
 _lock = threading.Lock()
-_current_execution_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "pdf_agent_current_execution_id",
+_current_conversation_run_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "pdf_agent_current_conversation_run_id",
     default=None,
 )
 
 
 @contextmanager
-def bind_execution_context(execution_id: str | None):
-    """Bind the current execution id so nested command calls are tracked automatically."""
-    token = _current_execution_id.set(execution_id)
+def bind_conversation_run_context(conversation_run_id: str | None):
+    """Bind the current conversation-run id so nested command calls are tracked automatically."""
+    token = _current_conversation_run_id.set(conversation_run_id)
     try:
         yield
     finally:
-        _current_execution_id.reset(token)
+        _current_conversation_run_id.reset(token)
 
 
 def run_command(
     cmd: list[str],
     *,
-    job_id: str | None = None,
+    conversation_run_id: str | None = None,
     cwd: Path | None = None,
     timeout: int | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run a subprocess while tracking it so execution cancellation can terminate it."""
-    tracked_job_id = job_id or _current_execution_id.get()
+    """Run a subprocess while tracking it so conversation-run cancellation can terminate it."""
+    tracked_conversation_run_id = conversation_run_id or _current_conversation_run_id.get()
     popen_kwargs = {
         "cwd": str(cwd) if cwd else None,
         "stdout": subprocess.PIPE,
@@ -53,18 +53,18 @@ def run_command(
         popen_kwargs["start_new_session"] = True
 
     proc = subprocess.Popen(cmd, **popen_kwargs)
-    if tracked_job_id:
+    if tracked_conversation_run_id:
         with _lock:
-            _job_processes[tracked_job_id].add(proc)
+            _conversation_processes[tracked_conversation_run_id].add(proc)
     try:
         stdout, stderr = proc.communicate(timeout=timeout or settings.external_cmd_timeout_sec)
     except subprocess.TimeoutExpired as exc:
         _terminate_process(proc)
         raise ToolError(ErrorCode.ENGINE_EXEC_TIMEOUT, f"Command timed out: {' '.join(cmd)}") from exc
     finally:
-        if tracked_job_id:
+        if tracked_conversation_run_id:
             with _lock:
-                _job_processes.get(tracked_job_id, set()).discard(proc)
+                _conversation_processes.get(tracked_conversation_run_id, set()).discard(proc)
 
     result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
     if check and result.returncode != 0:
@@ -73,10 +73,10 @@ def run_command(
     return result
 
 
-def cancel_job_processes(job_id: str) -> int:
-    """Terminate all tracked subprocesses for the given execution id."""
+def cancel_conversation_processes(conversation_run_id: str) -> int:
+    """Terminate all tracked subprocesses for the given conversation-run id."""
     with _lock:
-        processes = list(_job_processes.pop(job_id, set()))
+        processes = list(_conversation_processes.pop(conversation_run_id, set()))
     for proc in processes:
         _terminate_process(proc)
     return len(processes)

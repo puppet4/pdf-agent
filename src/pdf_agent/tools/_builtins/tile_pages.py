@@ -14,6 +14,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 def _render_first_page_png(pdf_path: Path, tmpdir: Path, dpi: int = 96) -> Path | None:
@@ -66,7 +67,7 @@ class TilePagesTool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "pdftoppm (poppler-utils) is not installed")
 
         params = self.validate(params)
-        output_path = workdir / "tiled.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已拼接页面")
         direction = params["direction"]
 
         # Get page dimensions from each PDF

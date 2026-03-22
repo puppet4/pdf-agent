@@ -10,6 +10,7 @@ from reportlab.pdfgen import canvas
 from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class AddPageNumbersTool(BaseTool):
@@ -83,7 +84,7 @@ class AddPageNumbersTool(BaseTool):
         reporter: ProgressReporter | None = None,
     ) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "numbered.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已加页码")
 
         with pikepdf.open(inputs[0]) as pdf:
             total = len(pdf.pages)

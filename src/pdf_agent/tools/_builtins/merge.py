@@ -7,6 +7,7 @@ import pikepdf
 
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 
 
@@ -57,7 +58,7 @@ class MergeTool(BaseTool):
             raise ToolError(ErrorCode.INVALID_INPUT_FILE, "Merge requires at least 2 input files")
 
         params = self.validate(params)
-        output_path = workdir / "merged.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已合并")
 
         pdf_out = pikepdf.Pdf.new()
         mode = params["mode"]

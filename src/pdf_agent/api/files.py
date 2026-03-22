@@ -7,8 +7,9 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from sqlalchemy import select
@@ -24,6 +25,21 @@ from pdf_agent.services import FileService
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 logger = logging.getLogger(__name__)
+
+
+def _content_disposition_headers(filename: str, *, inline: bool) -> dict[str, str]:
+    disposition = "inline" if inline else "attachment"
+    safe_name = filename.replace("\\", "_").replace("\r", "").replace("\n", "").replace('"', "")
+    ascii_fallback = safe_name.encode("ascii", "ignore").decode("ascii").strip(" .")
+    if not ascii_fallback:
+        suffix = Path(safe_name).suffix.encode("ascii", "ignore").decode("ascii")
+        ascii_fallback = f"download{suffix}" if suffix else "download"
+    encoded_name = quote(safe_name, safe="")
+    return {
+        "Content-Disposition": (
+            f'{disposition}; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_name}'
+        )
+    }
 
 
 def _normalize_upload_content_type(filename: str, content_type: str | None) -> str:
@@ -169,6 +185,7 @@ async def delete_file(
 )
 async def download_file(
     file_id: uuid.UUID,
+    inline: bool = Query(False, description="Return with inline Content-Disposition for preview"),
     session: AsyncSession = Depends(get_session),
 ):
     """Download an uploaded file."""
@@ -177,7 +194,12 @@ async def download_file(
     path = Path(record.storage_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
-    return FileResponse(path, filename=record.orig_name, media_type=record.mime_type)
+    return FileResponse(
+        path,
+        filename=record.orig_name,
+        media_type=record.mime_type,
+        headers=_content_disposition_headers(record.orig_name, inline=inline),
+    )
 
 
 @router.get(

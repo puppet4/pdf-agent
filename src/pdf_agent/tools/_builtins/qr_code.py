@@ -5,12 +5,14 @@ import io
 from pathlib import Path
 
 import pikepdf
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class QrCodeTool(BaseTool):
@@ -53,7 +55,7 @@ class QrCodeTool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "qrcode package not installed. Run: pip install qrcode[pil]")
 
         params = self.validate(params)
-        output_path = workdir / "qr_inserted.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已加二维码")
         size = params["size"]
         margin = 15
 
@@ -83,7 +85,7 @@ class QrCodeTool(BaseTool):
                 overlay_buf = io.BytesIO()
                 c = canvas.Canvas(overlay_buf, pagesize=(pw, ph))
                 qr_buf.seek(0)
-                c.drawImage(qr_buf, x, y, width=size, height=size, mask="auto")
+                c.drawImage(ImageReader(qr_buf), x, y, width=size, height=size, mask="auto")
                 c.save()
                 overlay_buf.seek(0)
 

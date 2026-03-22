@@ -10,6 +10,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class PagesToZipTool(BaseTool):
@@ -45,7 +46,7 @@ class PagesToZipTool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "pdftoppm (poppler-utils) is not installed")
 
         params = self.validate(params)
-        output_zip = workdir / "pages.zip"
+        output_zip = workdir / localized_output_name(inputs[0], "页面图片包", ext=".zip")
         fmt = params["format"]
         ext = "jpg" if fmt == "jpeg" else fmt
         ppm_flag = f"-{fmt}"

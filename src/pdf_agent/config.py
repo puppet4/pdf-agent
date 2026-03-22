@@ -6,7 +6,12 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = {"env_prefix": "PDF_AGENT_"}
+    model_config = {
+        "env_prefix": "PDF_AGENT_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     # --- App ---
     app_name: str = "PDF Agent"
@@ -30,6 +35,7 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 200
     max_page_count: int = 2000
     external_cmd_timeout_sec: int = 1800  # 30 min
+    libreoffice_timeout_sec: int = 10
 
     # --- Access Control ---
     api_key: str = ""  # if set, require X-API-Key header for all API calls
@@ -45,7 +51,7 @@ class Settings(BaseSettings):
     rate_limit_rpm: int = 20  # max chat requests per minute per IP, 0 = disabled
 
     # --- Cleanup ---
-    thread_ttl_hours: int = 72  # delete thread workdirs older than this
+    conversation_ttl_hours: int = 72  # delete expired conversation workdirs older than this
     max_storage_gb: int = 10
 
     # --- Observability ---
@@ -60,8 +66,8 @@ class Settings(BaseSettings):
         return self.data_dir / "uploads"
 
     @property
-    def threads_dir(self) -> Path:
-        return self.data_dir / "threads"
+    def conversations_dir(self) -> Path:
+        return self.data_dir / "conversations"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -73,7 +79,7 @@ class Settings(BaseSettings):
 
     def ensure_dirs(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
-        self.threads_dir.mkdir(parents=True, exist_ok=True)
+        self.conversations_dir.mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()

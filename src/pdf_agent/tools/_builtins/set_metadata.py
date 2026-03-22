@@ -7,6 +7,7 @@ import pikepdf
 
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class SetMetadataTool(BaseTool):
@@ -39,7 +40,7 @@ class SetMetadataTool(BaseTool):
         reporter: ProgressReporter | None = None,
     ) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "metadata_updated.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已更新元数据")
 
         field_map = {
             "title": "/Title",
@@ -50,10 +51,9 @@ class SetMetadataTool(BaseTool):
         }
 
         with pikepdf.open(inputs[0]) as pdf:
-            with pdf.open_metadata() as meta:
-                for param_key, pdf_key in field_map.items():
-                    if param_key in params:
-                        meta[pdf_key] = params[param_key]
+            for param_key, pdf_key in field_map.items():
+                if param_key in params:
+                    pdf.docinfo[pikepdf.Name(pdf_key)] = str(params[param_key])
             pdf.save(output_path)
 
         updated = [k for k in field_map if k in params]

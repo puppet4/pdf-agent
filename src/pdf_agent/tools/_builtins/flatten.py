@@ -8,6 +8,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class FlattenTool(BaseTool):
@@ -40,7 +41,7 @@ class FlattenTool(BaseTool):
         if not gs_bin:
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "Ghostscript (gs) is not installed")
 
-        output_path = workdir / "flattened.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已扁平化")
 
         cmd = [
             gs_bin,

@@ -5,12 +5,14 @@ import io
 from pathlib import Path
 
 import pikepdf
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class BarcodeTool(BaseTool):
@@ -56,7 +58,7 @@ class BarcodeTool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "python-barcode not installed. Run: pip install python-barcode[images]")
 
         params = self.validate(params)
-        output_path = workdir / "barcode_inserted.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已加条形码")
         margin = 15
 
         # Generate barcode image
@@ -91,7 +93,7 @@ class BarcodeTool(BaseTool):
                 overlay_buf = io.BytesIO()
                 c = canvas.Canvas(overlay_buf, pagesize=(pw, ph))
                 bc_buf.seek(0)
-                c.drawImage(bc_buf, x, y, width=sw, height=sh, mask="auto")
+                c.drawImage(ImageReader(bc_buf), x, y, width=sw, height=sh, mask="auto")
                 c.save()
                 overlay_buf.seek(0)
 

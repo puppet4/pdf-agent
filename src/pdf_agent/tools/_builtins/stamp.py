@@ -6,12 +6,14 @@ from pathlib import Path
 
 import pikepdf
 from PIL import Image
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class StampTool(BaseTool):
@@ -92,7 +94,7 @@ class StampTool(BaseTool):
         if not img_path:
             raise ToolError(ErrorCode.INVALID_PARAMS, "No stamp image provided (PNG or JPG)")
 
-        output_path = workdir / "stamped.pdf"
+        output_path = workdir / localized_output_name(pdf_path, "已盖章")
 
         with pikepdf.open(pdf_path) as pdf:
             total = len(pdf.pages)
@@ -137,7 +139,7 @@ class StampTool(BaseTool):
                 stamp_img.save(img_buf, format="PNG")
                 img_buf.seek(0)
                 c.drawImage(
-                    img_buf, x, y, width=sw, height=sh, mask="auto"
+                    ImageReader(img_buf), x, y, width=sw, height=sh, mask="auto"
                 )
                 c.save()
                 buf.seek(0)

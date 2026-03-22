@@ -45,7 +45,7 @@ Expected outcome:
 Message:
 
 ```text
-refactor: collapse legacy execution infrastructure into chat-first runtime
+refactor: collapse legacy runtime infrastructure into chat-first conversation flow
 ```
 
 Suggested paths:
@@ -89,7 +89,7 @@ Notes:
 Message:
 
 ```text
-feat: align builtin tools with shared execution command runner
+feat: align builtin tools with shared conversation-run command runner
 ```
 
 Suggested paths:
@@ -139,7 +139,7 @@ Notes:
 Message:
 
 ```text
-test: freeze execution architecture docs and smoke acceptance suite
+test: freeze conversation-first architecture docs and smoke acceptance suite
 ```
 
 Suggested paths:

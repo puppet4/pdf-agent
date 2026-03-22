@@ -7,12 +7,10 @@ import logging.config
 import os
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from psycopg_pool import AsyncConnectionPool
 from sqlalchemy import select
 
@@ -63,41 +61,41 @@ def _sync_database_url(database_url: str) -> str:
     return database_url.replace("postgresql+asyncpg://", "postgresql://")
 
 
-async def _cleanup_thread_checkpoints(checkpointer, thread_ids: list[str]) -> int:
-    """Delete persisted checkpoint state for known thread ids."""
+async def _cleanup_conversation_checkpoints(checkpointer, conversation_ids: list[str]) -> int:
+    """Delete persisted checkpoint state for known conversation ids."""
     if checkpointer is None:
         return 0
 
     removed = 0
-    for thread_id in thread_ids:
+    for conversation_id in conversation_ids:
         try:
-            await checkpointer.adelete_thread(thread_id)
+            await checkpointer.adelete_thread(conversation_id)
             removed += 1
         except Exception:
-            logger.warning("Failed to clean up checkpoint state for %s", thread_id, exc_info=True)
+            logger.warning("Failed to clean up checkpoint state for %s", conversation_id, exc_info=True)
     return removed
 
 
-async def _cleanup_expired_threads_with_checkpointer(
+async def _cleanup_expired_conversations_with_checkpointer(
     checkpointer,
-    thread_ids: list[str] | None = None,
+    conversation_ids: list[str] | None = None,
 ) -> int:
-    """Delete expired thread workdirs and matching checkpoint state."""
+    """Delete expired conversation workdirs and matching checkpoint state."""
     from pdf_agent.storage import storage
 
-    expired = thread_ids if thread_ids is not None else storage.list_expired_threads()
+    expired = conversation_ids if conversation_ids is not None else storage.list_expired_conversations()
     removed = 0
-    for thread_id in expired:
+    for conversation_id in expired:
         try:
-            storage.cleanup_thread(thread_id)
+            storage.cleanup_conversation(conversation_id)
             removed += 1
             if checkpointer is not None:
                 try:
-                    await checkpointer.adelete_thread(thread_id)
+                    await checkpointer.adelete_thread(conversation_id)
                 except Exception:
-                    logger.warning("Failed to clean up checkpoint state for %s", thread_id, exc_info=True)
+                    logger.warning("Failed to clean up checkpoint state for %s", conversation_id, exc_info=True)
         except Exception:
-            logger.exception("Failed to clean up expired thread %s", thread_id)
+            logger.exception("Failed to clean up expired conversation %s", conversation_id)
     return removed
 
 
@@ -122,22 +120,22 @@ async def _cleanup_upload_records(upload_ids: list[str]) -> int:
 
 
 async def _cleanup_loop(app: FastAPI):
-    """Periodically clean up expired uploads, stale thread state, and storage pressure."""
+    """Periodically clean up expired uploads, stale conversation state, and storage pressure."""
     from pdf_agent.storage import storage
 
     while True:
         await asyncio.sleep(3600)  # every hour
         try:
-            removed_threads = await _cleanup_expired_threads_with_checkpointer(
+            removed_conversations = await _cleanup_expired_conversations_with_checkpointer(
                 getattr(app.state, "checkpointer", None)
             )
             removed_upload_ids = storage.cleanup_expired_uploads()
             removed_uploads = await _cleanup_upload_records(removed_upload_ids)
             trimmed = storage.trim_storage_lru()
-            if removed_threads or removed_uploads or trimmed:
+            if removed_conversations or removed_uploads or trimmed:
                 logger.info(
-                    "Cleaned up %d thread(s), %d upload(s), trimmed %d dir(s)",
-                    removed_threads,
+                    "Cleaned up %d conversation(s), %d upload(s), trimmed %d dir(s)",
+                    removed_conversations,
                     removed_uploads,
                     trimmed,
                 )
@@ -184,10 +182,10 @@ async def lifespan(app: FastAPI):
 
     # Run initial cleanup
     from pdf_agent.storage import storage
-    expired_thread_ids = storage.list_expired_threads()
-    removed = await _cleanup_expired_threads_with_checkpointer(None, thread_ids=expired_thread_ids)
+    expired_conversation_ids = storage.list_expired_conversations()
+    removed = await _cleanup_expired_conversations_with_checkpointer(None, conversation_ids=expired_conversation_ids)
     if removed:
-        logger.info("Startup cleanup: removed %d expired thread(s)", removed)
+        logger.info("Startup cleanup: removed %d expired conversation(s)", removed)
     removed_upload_ids = storage.cleanup_expired_uploads()
     removed_uploads = await _cleanup_upload_records(removed_upload_ids)
     if removed_uploads:
@@ -250,11 +248,11 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("OpenAI API key not configured; agent endpoints disabled")
 
-    # Catch any expired threads that may still have persisted checkpoint state.
-    if app.state.checkpointer is not None and expired_thread_ids:
-        removed_checkpoints = await _cleanup_thread_checkpoints(app.state.checkpointer, expired_thread_ids)
+    # Catch any expired conversations that may still have persisted checkpoint state.
+    if app.state.checkpointer is not None and expired_conversation_ids:
+        removed_checkpoints = await _cleanup_conversation_checkpoints(app.state.checkpointer, expired_conversation_ids)
         if removed_checkpoints:
-            logger.info("Startup cleanup: removed %d expired checkpoint thread(s)", removed_checkpoints)
+            logger.info("Startup cleanup: removed %d expired checkpoint conversation(s)", removed_checkpoints)
 
     # Start background cleanup task
     cleanup_task = asyncio.create_task(_cleanup_loop(app))
@@ -299,24 +297,6 @@ app.add_middleware(
 
 # Routes
 app.include_router(api_router)
-
-# Static frontend
-_static_dir = Path(__file__).parent / "static"
-if _static_dir.is_dir():
-    app.mount("/static", StaticFiles(directory=str(_static_dir), html=True), name="static")
-
-
-@app.get("/", include_in_schema=False)
-async def frontend_index():
-    index_path = _static_dir / "index.html"
-    return FileResponse(
-        index_path,
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
 
 
 @app.exception_handler(PDFAgentError)

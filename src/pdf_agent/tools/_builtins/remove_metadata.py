@@ -8,6 +8,7 @@ from pikepdf import Name
 
 from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class RemoveMetadataTool(BaseTool):
@@ -27,7 +28,7 @@ class RemoveMetadataTool(BaseTool):
         return {}
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
-        output_path = workdir / "no_metadata.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已移除元数据")
         removed_fields: list[str] = []
 
         with pikepdf.open(inputs[0]) as pdf:
