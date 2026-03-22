@@ -1,4 +1,4 @@
-"""Agent API — conversation streaming and conversation file access."""
+"""Conversation API — chat streaming and artifact access."""
 from __future__ import annotations
 
 import asyncio
@@ -10,12 +10,15 @@ import shutil
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from pdf_agent.agent.intent_hints import build_intent_hints
 from pdf_agent.agent.state import FileInfo
 from pdf_agent.agent.tools_adapter import parse_tool_result_payload
 from pdf_agent.config import settings
@@ -24,25 +27,42 @@ from pdf_agent.db.models import FileRecord
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/agent", tags=["agent"])
+router = APIRouter(tags=["conversations"])
 
 # Keys to strip from tool_start args (injected by our tool node, not user-facing)
 _INTERNAL_KEYS = {"state", "tool_call_id", "progress_reporter"}
-_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SENSITIVE_ARG_RE = re.compile(r"(password|secret|token|api[_-]?key|authorization)", re.IGNORECASE)
 
-# Heartbeat interval during tool execution (seconds)
+# Heartbeat interval during a tool run (seconds)
 _HEARTBEAT_INTERVAL = 5.0
+_DEFAULT_CONVERSATION_TITLE = "新会话"
+_MAX_CONVERSATION_TITLE_LENGTH = 48
+
+
+def _content_disposition_headers(filename: str, *, inline: bool) -> dict[str, str]:
+    disposition = "inline" if inline else "attachment"
+    safe_name = filename.replace("\\", "_").replace("\r", "").replace("\n", "").replace('"', "")
+    ascii_fallback = safe_name.encode("ascii", "ignore").decode("ascii").strip(" .")
+    if not ascii_fallback:
+        suffix = Path(safe_name).suffix.encode("ascii", "ignore").decode("ascii")
+        ascii_fallback = f"download{suffix}" if suffix else "download"
+    encoded_name = quote(safe_name, safe="")
+    return {
+        "Content-Disposition": (
+            f'{disposition}; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_name}'
+        )
+    }
 
 
 # ---------------------------------------------------------------------------
 # Request / response schemas
 # ---------------------------------------------------------------------------
 
-class ChatRequest(BaseModel):
-    thread_id: str | None = None
+class MessageCreateRequest(BaseModel):
     message: str
     file_ids: list[str] = []
+    artifact_paths: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +99,81 @@ async def _resolve_uploaded_files(file_ids: list[str]) -> list[FileInfo]:
     return files
 
 
+def _artifact_path_to_file_info(conversation_id: str, artifact_path: str) -> FileInfo:
+    resolved = _resolve_conversation_artifact_path(conversation_id, artifact_path)
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail=f"Artifact not found: {artifact_path}")
+    guessed_mime = "application/pdf" if resolved.suffix.lower() == ".pdf" else "application/octet-stream"
+    page_count = None
+    if guessed_mime == "application/pdf":
+        try:
+            import pikepdf
+            with pikepdf.open(resolved) as pdf:
+                page_count = len(pdf.pages)
+        except Exception:
+            page_count = None
+    return FileInfo(
+        file_id=f"artifact:{artifact_path}",
+        path=str(resolved),
+        orig_name=resolved.name,
+        mime_type=guessed_mime,
+        page_count=page_count,
+        source="artifact",
+    )
+
+
+def _resolve_selected_artifacts(conversation_id: str, artifact_paths: list[str]) -> list[FileInfo]:
+    if not artifact_paths:
+        return []
+    seen: set[str] = set()
+    files: list[FileInfo] = []
+    for artifact_path in artifact_paths:
+        if artifact_path in seen:
+            continue
+        seen.add(artifact_path)
+        files.append(_artifact_path_to_file_info(conversation_id, artifact_path))
+    return files
+
+
+def _serialize_selected_input(file_info: FileInfo, conversation_id: str) -> dict[str, str]:
+    path = str(file_info["path"])
+    item = {
+        "name": file_info["orig_name"],
+        "source": file_info["source"],
+        "type": file_info["mime_type"],
+    }
+    if file_info["source"] == "artifact":
+        item["path"] = _paths_to_download_urls(conversation_id, [path])[0]
+    else:
+        item["file_id"] = file_info["file_id"]
+    return item
+
+
+def _build_message_input_state(
+    *,
+    message: str,
+    human_message_kwargs: dict[str, object],
+    conversation_workdir: Path,
+    conversation_id: str,
+    selected_inputs: list[FileInfo],
+) -> dict:
+    selected_paths = [f["path"] for f in selected_inputs]
+    input_state: dict = {
+        "messages": [
+            HumanMessage(
+                content=message,
+                additional_kwargs=human_message_kwargs,
+            )
+        ],
+        "conversation_workdir": str(conversation_workdir),
+        "configurable": {"thread_id": conversation_id},
+    }
+    if selected_inputs:
+        input_state["files"] = selected_inputs
+        input_state["current_files"] = selected_paths
+    return input_state
+
+
 def _sse_event(event: str, data: dict) -> str:
     """Format a Server-Sent Event."""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -104,64 +199,64 @@ def _sanitize_arg_value(key: str, value):
     return value
 
 
-def _paths_to_download_urls(thread_id: str, file_paths: list[str]) -> list[str]:
-    """Convert absolute file paths to API download URLs.
-
-    Preserves nested output paths under the thread directory:
-    /api/agent/threads/{thread_id}/files/{step}/nested/{filename}
-    """
+def _paths_to_download_urls(conversation_id: str, file_paths: list[str]) -> list[str]:
+    """Convert absolute file paths to conversation artifact URLs."""
     urls = []
-    thread_dir = _resolve_thread_dir(thread_id)
+    conversation_dir = _resolve_conversation_dir(conversation_id)
     for fp in file_paths:
         p = Path(fp)
         try:
-            rel = p.resolve().relative_to(thread_dir)
+            rel = p.resolve().relative_to(conversation_dir)
         except ValueError:
             parts = p.parts
-            if thread_id in parts:
-                rel = Path(*parts[parts.index(thread_id) + 1 :])
+            if conversation_id in parts:
+                rel = Path(*parts[parts.index(conversation_id) + 1 :])
             else:
                 step_index = next((idx for idx, part in enumerate(parts) if part.startswith("step_")), None)
                 if step_index is None:
                     continue
                 rel = Path(*parts[step_index:])
-        urls.append(f"/api/agent/threads/{thread_id}/files/{rel.as_posix()}")
+        urls.append(f"/api/conversations/{conversation_id}/artifacts/{rel.as_posix()}")
     return urls
 
 
-def _validate_thread_id(thread_id: str, *, status_code: int) -> str:
-    """Allow only simple thread ids that stay within the threads directory."""
-    if not thread_id or not _THREAD_ID_RE.fullmatch(thread_id):
-        raise HTTPException(status_code=status_code, detail="Invalid thread_id")
-    return thread_id
+def _validate_conversation_id(conversation_id: str, *, status_code: int) -> str:
+    """Allow only simple conversation ids that stay within the conversation storage directory."""
+    if not conversation_id or not _CONVERSATION_ID_RE.fullmatch(conversation_id):
+        raise HTTPException(status_code=status_code, detail="Invalid conversation_id")
+    return conversation_id
 
 
-def _resolve_thread_dir(thread_id: str) -> Path:
-    """Resolve a thread directory and reject path traversal."""
-    safe_thread_id = _validate_thread_id(thread_id, status_code=400)
-    base_dir = settings.threads_dir.resolve()
-    candidate = (base_dir / safe_thread_id).resolve()
+def _resolve_conversation_dir(conversation_id: str) -> Path:
+    """Resolve a conversation directory and reject path traversal."""
+    safe_conversation_id = _validate_conversation_id(conversation_id, status_code=400)
+    base_dir = settings.conversations_dir.resolve()
+    candidate = (base_dir / safe_conversation_id).resolve()
     try:
         candidate.relative_to(base_dir)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid thread path") from exc
+        raise HTTPException(status_code=400, detail="Invalid conversation path") from exc
     return candidate
 
 
-def _resolve_thread_file_path(thread_id: str, file_path: str, filename: str | None = None) -> Path:
-    """Resolve a file inside a thread directory and reject traversal."""
+def _resolve_conversation_artifact_path(
+    conversation_id: str,
+    artifact_path: str,
+    filename: str | None = None,
+) -> Path:
+    """Resolve a file inside a conversation directory and reject traversal."""
     if filename is not None:
-        file_path = f"{file_path}/{filename}"
-    if not file_path or file_path.startswith("/") or ".." in Path(file_path).parts:
-        raise HTTPException(status_code=400, detail="Invalid thread file path")
-    thread_dir = _resolve_thread_dir(thread_id)
-    if not file_path.split("/", 1)[0].startswith("step_"):
-        raise HTTPException(status_code=400, detail="Invalid thread file path")
-    candidate = (thread_dir / file_path).resolve()
+        artifact_path = f"{artifact_path}/{filename}"
+    if not artifact_path or artifact_path.startswith("/") or ".." in Path(artifact_path).parts:
+        raise HTTPException(status_code=400, detail="Invalid conversation artifact path")
+    conversation_dir = _resolve_conversation_dir(conversation_id)
+    if not artifact_path.split("/", 1)[0].startswith("step_"):
+        raise HTTPException(status_code=400, detail="Invalid conversation artifact path")
+    candidate = (conversation_dir / artifact_path).resolve()
     try:
-        candidate.relative_to(thread_dir)
+        candidate.relative_to(conversation_dir)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid thread file path") from exc
+        raise HTTPException(status_code=400, detail="Invalid conversation artifact path") from exc
     return candidate
 
 
@@ -172,78 +267,300 @@ def _extract_output_files(output: str) -> list[str]:
     return parse_tool_result_payload(output).output_files
 
 
+def _conversation_title_path(conversation_dir: Path) -> Path:
+    return conversation_dir / ".title.txt"
+
+
+def _sanitize_conversation_title(raw: str) -> str:
+    normalized = " ".join((raw or "").strip().split())
+    if normalized == "New Conversation":
+        normalized = _DEFAULT_CONVERSATION_TITLE
+    if not normalized:
+        return _DEFAULT_CONVERSATION_TITLE
+    if len(normalized) > _MAX_CONVERSATION_TITLE_LENGTH:
+        return normalized[: _MAX_CONVERSATION_TITLE_LENGTH - 1].rstrip() + "…"
+    return normalized
+
+
+def _read_conversation_title(conversation_dir: Path) -> str:
+    title_path = _conversation_title_path(conversation_dir)
+    if not title_path.exists():
+        return _DEFAULT_CONVERSATION_TITLE
+    try:
+        return _sanitize_conversation_title(title_path.read_text(encoding="utf-8"))
+    except OSError:
+        logger.warning("Failed to read conversation title from %s", title_path, exc_info=True)
+        return _DEFAULT_CONVERSATION_TITLE
+
+
+def _write_conversation_title(conversation_dir: Path, title: str) -> None:
+    title_path = _conversation_title_path(conversation_dir)
+    safe_title = _sanitize_conversation_title(title)
+    try:
+        title_path.write_text(safe_title, encoding="utf-8")
+    except OSError:
+        logger.warning("Failed to persist conversation title to %s", title_path, exc_info=True)
+
+
+def _count_artifacts(conversation_dir: Path) -> int:
+    total = 0
+    for step_dir in conversation_dir.iterdir():
+        try:
+            if not step_dir.is_dir() or not step_dir.name.startswith("step_"):
+                continue
+        except OSError:
+            continue
+        total += sum(1 for candidate in step_dir.rglob("*") if candidate.is_file())
+    return total
+
+
+async def _load_conversation_messages(conversation_id: str, request: Request) -> list[dict]:
+    """Load persisted conversation messages from LangGraph state."""
+    graph = request.app.state.graph
+    messages: list[dict] = []
+    if graph is None:
+        return messages
+
+    try:
+        config = {"configurable": {"thread_id": conversation_id}}
+        state = await graph.aget_state(config)
+        if state and state.values:
+            pending_output_files: list[str] = []
+            for msg in state.values.get("messages", []):
+                if msg.type == "tool":
+                    parsed = parse_tool_result_payload(
+                        msg.content if isinstance(getattr(msg, "content", ""), str) else ""
+                    )
+                    pending_output_files.extend(parsed.output_files)
+                    artifact = getattr(msg, "artifact", None)
+                    if isinstance(artifact, dict):
+                        output_files = artifact.get("output_files", [])
+                        if isinstance(output_files, list):
+                            pending_output_files.extend(
+                                path for path in output_files if isinstance(path, str) and path
+                            )
+                    continue
+
+                msg_data = {"type": msg.type, "content": ""}
+                if hasattr(msg, "content"):
+                    content = msg.content
+                    msg_data["content"] = content if isinstance(content, str) else str(content)
+                if msg.type == "human":
+                    additional_kwargs = getattr(msg, "additional_kwargs", None)
+                    if isinstance(additional_kwargs, dict):
+                        selected_inputs = additional_kwargs.get("selected_inputs")
+                        if isinstance(selected_inputs, list):
+                            msg_data["attachments"] = [
+                                item for item in selected_inputs
+                                if isinstance(item, dict) and isinstance(item.get("name"), str)
+                            ]
+                if msg.type == "ai" and pending_output_files:
+                    deduped_files = list(dict.fromkeys(pending_output_files))
+                    msg_data["files"] = _paths_to_download_urls(conversation_id, deduped_files)
+                    pending_output_files = []
+                messages.append(msg_data)
+    except Exception:
+        logger.warning("Failed to load conversation state for %s", conversation_id, exc_info=True)
+        raise HTTPException(status_code=503, detail="Conversation state unavailable")
+    return messages
+
+
+def _serialize_conversation(conversation_dir: Path) -> dict:
+    stat = conversation_dir.stat()
+    return {
+        "id": conversation_dir.name,
+        "conversation_id": conversation_dir.name,
+        "title": _read_conversation_title(conversation_dir),
+        "created_at": stat.st_ctime,
+        "updated_at": stat.st_mtime,
+        "artifact_count": _count_artifacts(conversation_dir),
+        "step_count": sum(1 for d in conversation_dir.iterdir() if d.is_dir() and d.name.startswith("step_")),
+    }
+
+
+def _list_artifacts(conversation_dir: Path, conversation_id: str) -> list[dict]:
+    artifacts: list[dict] = []
+    for step_dir in sorted(conversation_dir.iterdir()):
+        try:
+            if not step_dir.is_dir() or not step_dir.name.startswith("step_"):
+                continue
+        except OSError:
+            logger.warning("Failed to inspect conversation step dir for %s", conversation_id, exc_info=True)
+            continue
+        for artifact in step_dir.rglob("*"):
+            try:
+                if not artifact.is_file():
+                    continue
+                rel = artifact.relative_to(conversation_dir).as_posix()
+                artifacts.append(
+                    {
+                        "filename": artifact.name,
+                        "path": rel,
+                        "size_bytes": artifact.stat().st_size,
+                        "download_url": f"/api/conversations/{conversation_id}/artifacts/{rel}",
+                    }
+                )
+            except OSError:
+                logger.warning("Failed to inspect conversation artifact %s", artifact, exc_info=True)
+    return artifacts
+
+
 # ---------------------------------------------------------------------------
-# SSE Chat endpoint (with heartbeat progress)
+# Conversation endpoints
 # ---------------------------------------------------------------------------
 
-@router.post("/chat")
-async def chat(req: ChatRequest, request: Request):
+
+@router.get("/api/conversations")
+async def list_conversations(page: int = 1, limit: int = 100):
+    """List all conversations."""
+    conversations_dir = settings.conversations_dir
+    if not conversations_dir.exists():
+        return {"conversations": [], "total": 0, "page": 1, "limit": limit}
+
+    conversations = []
+    for entry in conversations_dir.iterdir():
+        try:
+            if not entry.is_dir() or entry.name.startswith("direct_"):
+                continue
+            conversations.append(_serialize_conversation(entry))
+        except OSError:
+            logger.warning("Failed to inspect conversation %s", entry, exc_info=True)
+            continue
+
+    conversations.sort(key=lambda item: item["updated_at"], reverse=True)
+    page = max(1, int(page))
+    limit = max(1, min(int(limit), 200))
+    total = len(conversations)
+    start = (page - 1) * limit
+    end = start + limit
+    return {"conversations": conversations[start:end], "total": total, "page": page, "limit": limit}
+
+
+@router.post("/api/conversations")
+async def create_conversation():
+    """Create an empty conversation."""
+    conversation_id = str(uuid.uuid4())
+    conversation_dir = _resolve_conversation_dir(conversation_id)
+    conversation_dir.mkdir(parents=True, exist_ok=False)
+    _write_conversation_title(conversation_dir, _DEFAULT_CONVERSATION_TITLE)
+    payload = _serialize_conversation(conversation_dir)
+    payload["messages"] = []
+    return payload
+
+
+@router.get("/api/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str, request: Request):
+    """Get conversation details including persisted message history."""
+    conversation_dir = _resolve_conversation_dir(conversation_id)
+    if not conversation_dir.exists():
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    payload = _serialize_conversation(conversation_dir)
+    payload["messages"] = await _load_conversation_messages(conversation_id, request)
+    return payload
+
+
+@router.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str, request: Request):
+    """Delete a conversation and its persisted state."""
+    conversation_dir = _resolve_conversation_dir(conversation_id)
+    if not conversation_dir.exists():
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+    if checkpointer is not None:
+        try:
+            await checkpointer.adelete_thread(conversation_id)
+        except Exception:
+            logger.warning("Failed to delete checkpoint state for %s", conversation_id, exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to delete conversation state")
+
+    shutil.rmtree(conversation_dir)
+    return {"deleted": True, "id": conversation_id}
+
+
+@router.get("/api/conversations/{conversation_id}/artifacts")
+async def list_conversation_artifacts(conversation_id: str):
+    """List generated artifacts for a conversation."""
+    conversation_dir = _resolve_conversation_dir(conversation_id)
+    if not conversation_dir.exists():
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"conversation_id": conversation_id, "artifacts": _list_artifacts(conversation_dir, conversation_id)}
+
+
+@router.get("/api/conversations/{conversation_id}/artifacts/{artifact_path:path}")
+async def download_conversation_artifact(
+    conversation_id: str,
+    artifact_path: str,
+    inline: bool = Query(False, description="Return with inline Content-Disposition for preview"),
+):
+    """Download a generated artifact for a conversation."""
+    conversation_dir = _resolve_conversation_dir(conversation_id)
+    if not conversation_dir.exists():
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    candidate = _resolve_conversation_artifact_path(conversation_id, artifact_path)
+    if candidate.is_file():
+        return FileResponse(
+            candidate,
+            filename=candidate.name,
+            headers=_content_disposition_headers(candidate.name, inline=inline),
+        )
+
+    raise HTTPException(status_code=404, detail=f"Artifact '{artifact_path}' not found")
+
+
+@router.post("/api/conversations/{conversation_id}/messages")
+async def create_message(conversation_id: str, req: MessageCreateRequest, request: Request):
     """Stream a conversation turn with the LangGraph agent via SSE."""
     graph = request.app.state.graph
     if graph is None:
         raise HTTPException(status_code=503, detail="Agent not initialized")
 
-    thread_id = _validate_thread_id(req.thread_id, status_code=422) if req.thread_id else str(uuid.uuid4())
+    conversation_id = _validate_conversation_id(conversation_id, status_code=422)
 
     # Resolve uploaded files
     uploaded_files = await _resolve_uploaded_files(req.file_ids)
-    uploaded_paths = [f["path"] for f in uploaded_files]
-
-    # Create thread workdir only after request validation succeeds
-    thread_workdir = _resolve_thread_dir(thread_id)
-    thread_workdir.mkdir(parents=True, exist_ok=True)
+    selected_artifacts = _resolve_selected_artifacts(conversation_id, req.artifact_paths)
+    selected_inputs = uploaded_files + selected_artifacts
+    # Create conversation workdir only after request validation succeeds
+    conversation_workdir = _resolve_conversation_dir(conversation_id)
+    conversation_workdir.mkdir(parents=True, exist_ok=True)
+    current_title = _read_conversation_title(conversation_workdir)
+    if current_title == _DEFAULT_CONVERSATION_TITLE:
+        _write_conversation_title(conversation_workdir, req.message)
 
     # Build input state
-    input_state: dict = {
-        "messages": [{"role": "user", "content": req.message}],
-        "thread_workdir": str(thread_workdir),
-        "configurable": {"thread_id": thread_id},
-    }
-    if uploaded_files:
-        input_state["files"] = uploaded_files
-        input_state["current_files"] = uploaded_paths
+    selected_input_summaries = [
+        _serialize_selected_input(file_info, conversation_id)
+        for file_info in selected_inputs
+    ]
+    normalized_intent_hints = build_intent_hints(req.message, selected_inputs)
+    human_message_kwargs: dict[str, object] = {}
+    if selected_input_summaries:
+        human_message_kwargs["selected_inputs"] = selected_input_summaries
+    if normalized_intent_hints:
+        human_message_kwargs["normalized_intent_hints"] = normalized_intent_hints
 
-    config = {"configurable": {"thread_id": thread_id}}
+    input_state = _build_message_input_state(
+        message=req.message,
+        human_message_kwargs=human_message_kwargs,
+        conversation_workdir=conversation_workdir,
+        conversation_id=conversation_id,
+        selected_inputs=selected_inputs,
+    )
+
+    config = {"configurable": {"thread_id": conversation_id}}
 
     async def event_stream():
-        yield _sse_event("thread", {"thread_id": thread_id})
-
-        tool_active = None
-        tool_start_time = None
+        yield _sse_event("conversation", {"conversation_id": conversation_id})
 
         # Import progress queue helpers
         from pdf_agent.agent.tools_adapter import get_progress_queue, release_progress_queue
-        prog_queue = get_progress_queue(thread_id)
+        prog_queue = get_progress_queue(conversation_id)
 
         try:
-            aiter = graph.astream_events(input_state, config=config, version="v2").__aiter__()
-            while True:
-                try:
-                    event = await asyncio.wait_for(aiter.__anext__(), timeout=_HEARTBEAT_INTERVAL)
-                except asyncio.TimeoutError:
-                    # Drain progress queue
-                    while True:
-                        try:
-                            prog = prog_queue.get_nowait()
-                            yield _sse_event("tool_progress", {
-                                "tool": tool_active or "",
-                                "percent": prog.get("percent", 0),
-                                "message": prog.get("message", ""),
-                                "elapsed_seconds": round(time.time() - tool_start_time, 1) if tool_start_time else 0,
-                            })
-                        except queue.Empty:
-                            break
-                    # Fallback heartbeat if no progress events
-                    if tool_active and tool_start_time:
-                        elapsed = time.time() - tool_start_time
-                        yield _sse_event("tool_progress", {
-                            "tool": tool_active,
-                            "elapsed_seconds": round(elapsed, 1),
-                        })
-                    continue
-                except StopAsyncIteration:
-                    break
-
+            async for event in graph.astream_events(input_state, config=config, version="v2"):
                 kind = event["event"]
 
                 # LLM token streaming
@@ -252,36 +569,21 @@ async def chat(req: ChatRequest, request: Request):
                     if chunk.content:
                         yield _sse_event("token", {"content": chunk.content})
 
-                # Tool start
-                elif kind == "on_tool_start":
-                    tool_active = event["name"]
-                    tool_start_time = time.time()
-                    raw_args = event["data"].get("input", {})
-                    yield _sse_event("tool_start", {
-                        "tool": event["name"],
-                        "args": _sanitize_tool_args(raw_args) if isinstance(raw_args, dict) else {},
-                    })
-
-                # Tool end — convert paths to download URLs, include elapsed time
+                # Tool end — only expose output files, not internal tool details
                 elif kind == "on_tool_end":
-                    elapsed = time.time() - tool_start_time if tool_start_time else 0
                     output = event["data"].get("output", "")
-                    file_paths = _extract_output_files(output)
-                    download_urls = _paths_to_download_urls(thread_id, file_paths)
-                    yield _sse_event("tool_end", {
-                        "tool": event["name"],
-                        "output": str(output)[:500],
-                        "files": download_urls,
-                        "elapsed_seconds": round(elapsed, 1),
-                    })
-                    tool_active = None
-                    tool_start_time = None
+                    parsed = parse_tool_result_payload(output) if isinstance(output, str) else None
+                    file_paths = parsed.output_files if parsed else _extract_output_files(output)
+                    if file_paths:
+                        yield _sse_event("artifact", {
+                            "files": _paths_to_download_urls(conversation_id, file_paths),
+                        })
 
         except Exception as e:
             logger.exception("Agent stream error")
             yield _sse_event("error", {"message": str(e)})
         finally:
-            release_progress_queue(thread_id)
+            release_progress_queue(conversation_id)
 
         yield _sse_event("done", {})
 
@@ -297,147 +599,3 @@ async def chat(req: ChatRequest, request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Thread file endpoints (step-aware to avoid collisions)
-# ---------------------------------------------------------------------------
-
-@router.get("/threads/{thread_id}/files")
-async def list_thread_files(thread_id: str):
-    """List all output files in a thread's workdir."""
-    thread_dir = _resolve_thread_dir(thread_id)
-    if not thread_dir.exists():
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    files = []
-    for step_dir in sorted(thread_dir.iterdir()):
-        try:
-            if not step_dir.is_dir() or not step_dir.name.startswith("step_"):
-                continue
-        except OSError:
-            logger.warning("Failed to inspect thread step dir for %s", thread_id, exc_info=True)
-            continue
-        for f in step_dir.rglob("*"):
-            try:
-                if not f.is_file():
-                    continue
-                rel = f.relative_to(thread_dir).as_posix()
-                item = {
-                    "filename": f.name,
-                    "size_bytes": f.stat().st_size,
-                    "download_url": f"/api/agent/threads/{thread_id}/files/{rel}",
-                }
-                if len(Path(rel).parts) > 2:
-                    item["path"] = rel
-                files.append(item)
-            except OSError:
-                logger.warning("Failed to inspect thread output %s", f, exc_info=True)
-                continue
-    return {"thread_id": thread_id, "files": files}
-
-
-@router.get("/threads/{thread_id}/files/{file_path:path}")
-async def download_thread_file(thread_id: str, file_path: str):
-    """Download a specific file from a thread's step directory."""
-    thread_dir = _resolve_thread_dir(thread_id)
-    if not thread_dir.exists():
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    candidate = _resolve_thread_file_path(thread_id, file_path)
-    if candidate.is_file():
-        return FileResponse(candidate, filename=candidate.name)
-
-    raise HTTPException(status_code=404, detail=f"File '{file_path}' not found in thread")
-
-
-# ---------------------------------------------------------------------------
-# Thread management endpoints
-# ---------------------------------------------------------------------------
-
-@router.get("/threads")
-async def list_threads(page: int = 1, limit: int = 100):
-    """List all conversation threads."""
-    threads_dir = settings.threads_dir
-    if not threads_dir.exists():
-        return {"threads": []}
-
-    threads = []
-    for entry in threads_dir.iterdir():
-        try:
-            if not entry.is_dir() or entry.name.startswith("direct_"):
-                continue
-            stat = entry.stat()
-            step_count = sum(1 for d in entry.iterdir() if d.is_dir() and d.name.startswith("step_"))
-            threads.append({
-                "thread_id": entry.name,
-                "created_at": stat.st_ctime,
-                "updated_at": stat.st_mtime,
-                "step_count": step_count,
-            })
-        except OSError:
-            logger.warning("Failed to inspect thread %s", entry, exc_info=True)
-            continue
-    threads.sort(key=lambda item: item["updated_at"], reverse=True)
-    page = max(1, int(page))
-    limit = max(1, min(int(limit), 200))
-    total = len(threads)
-    start = (page - 1) * limit
-    end = start + limit
-    return {"threads": threads[start:end], "total": total, "page": page, "limit": limit}
-
-
-@router.get("/threads/{thread_id}")
-async def get_thread(thread_id: str, request: Request):
-    """Get thread details including conversation history from checkpointer."""
-    thread_dir = _resolve_thread_dir(thread_id)
-    if not thread_dir.exists():
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    # Get conversation history from checkpointer
-    graph = request.app.state.graph
-    messages = []
-    if graph is not None:
-        try:
-            config = {"configurable": {"thread_id": thread_id}}
-            state = await graph.aget_state(config)
-            if state and state.values:
-                for msg in state.values.get("messages", []):
-                    msg_data = {"type": msg.type, "content": ""}
-                    if hasattr(msg, "content"):
-                        content = msg.content
-                        msg_data["content"] = content if isinstance(content, str) else str(content)
-                    if hasattr(msg, "tool_calls") and msg.tool_calls:
-                        msg_data["tool_calls"] = [
-                            {"name": tc["name"], "args": _sanitize_tool_args(tc["args"])}
-                            for tc in msg.tool_calls
-                        ]
-                    if hasattr(msg, "name") and msg.name:
-                        msg_data["name"] = msg.name
-                    messages.append(msg_data)
-        except Exception:
-            logger.warning("Failed to load thread state for %s", thread_id, exc_info=True)
-            raise HTTPException(status_code=503, detail="Thread state unavailable")
-
-    stat = thread_dir.stat()
-    return {
-        "thread_id": thread_id,
-        "created_at": stat.st_ctime,
-        "updated_at": stat.st_mtime,
-        "messages": messages,
-    }
-
-
-@router.delete("/threads/{thread_id}")
-async def delete_thread(thread_id: str, request: Request):
-    """Delete a thread and its workdir."""
-    thread_dir = _resolve_thread_dir(thread_id)
-    if not thread_dir.exists():
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    checkpointer = getattr(request.app.state, "checkpointer", None)
-    if checkpointer is not None:
-        try:
-            await checkpointer.adelete_thread(thread_id)
-        except Exception:
-            logger.warning("Failed to delete checkpoint state for %s", thread_id, exc_info=True)
-            raise HTTPException(status_code=500, detail="Failed to delete thread state")
-    shutil.rmtree(thread_dir)
-    return {"deleted": True, "thread_id": thread_id}

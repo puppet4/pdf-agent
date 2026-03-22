@@ -8,6 +8,7 @@ from PIL import Image
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class ImagesToPdfTool(BaseTool):
@@ -53,7 +54,7 @@ class ImagesToPdfTool(BaseTool):
         if not inputs:
             raise ToolError(ErrorCode.INVALID_INPUT_FILE, "At least one image is required")
 
-        output_path = workdir / "images.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "图片合成")
         page_size = params["page_size"]
 
         # Fixed page dimensions in points (72 dpi)

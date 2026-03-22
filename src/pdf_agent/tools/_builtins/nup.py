@@ -13,6 +13,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 # N-up layout: (columns, rows)
 _LAYOUTS: dict[str, tuple[int, int]] = {
@@ -95,7 +96,7 @@ class NUpTool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "pdftoppm (poppler-utils) is not installed")
 
         params = self.validate(params)
-        output_path = workdir / "nup.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "多页合一")
 
         paper_sizes = {"A4": (595.28, 841.89), "A3": (841.89, 1190.55), "Letter": (612, 792)}
         pw, ph = paper_sizes[params["paper_size"]]

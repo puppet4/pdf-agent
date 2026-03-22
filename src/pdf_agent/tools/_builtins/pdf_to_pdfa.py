@@ -8,6 +8,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 # ICC color profile path (bundled with Ghostscript)
@@ -54,7 +55,7 @@ class PdfATool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "Ghostscript (gs) is not installed")
 
         params = self.validate(params)
-        output_path = workdir / f"pdfa_{params['level']}.pdf"
+        output_path = workdir / localized_output_name(inputs[0], f"归档版_PDFA-{params['level'].upper()}")
         level_map = {"1b": "1", "2b": "2", "3b": "3"}
         pdfa_level = level_map[params["level"]]
 

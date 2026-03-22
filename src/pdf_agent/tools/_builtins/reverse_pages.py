@@ -7,6 +7,7 @@ import pikepdf
 
 from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class ReversePagesTool(BaseTool):
@@ -26,7 +27,7 @@ class ReversePagesTool(BaseTool):
         return {}
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
-        output_path = workdir / "reversed.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已倒序页面")
         with pikepdf.open(inputs[0]) as pdf:
             total = len(pdf.pages)
             out = pikepdf.Pdf.new()

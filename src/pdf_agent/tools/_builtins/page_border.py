@@ -12,6 +12,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class PageBorderTool(BaseTool):
@@ -59,7 +60,7 @@ class PageBorderTool(BaseTool):
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "bordered.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已加页面边框")
 
         with pikepdf.open(inputs[0]) as pdf:
             total = len(pdf.pages)

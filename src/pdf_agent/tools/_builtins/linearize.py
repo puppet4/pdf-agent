@@ -8,6 +8,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class LinearizeTool(BaseTool):
@@ -32,7 +33,7 @@ class LinearizeTool(BaseTool):
         if not qpdf:
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "qpdf is not installed")
 
-        output_path = workdir / "linearized.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "快速查看版")
         if reporter:
             reporter(10, "Linearizing with qpdf...")
 

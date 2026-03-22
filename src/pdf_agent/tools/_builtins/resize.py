@@ -9,6 +9,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 # Standard page sizes in points (72 dpi)
 _PAGE_SIZES: dict[str, tuple[float, float]] = {
@@ -66,7 +67,7 @@ class ResizeTool(BaseTool):
         reporter: ProgressReporter | None = None,
     ) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "resized.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已调整尺寸")
         target_w, target_h = _PAGE_SIZES[params["target_size"]]
 
         with pikepdf.open(inputs[0]) as pdf:

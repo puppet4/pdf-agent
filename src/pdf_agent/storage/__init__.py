@@ -37,13 +37,13 @@ class LocalStorage:
     def get_upload_path(self, file_id: uuid.UUID, filename: str) -> Path:
         return settings.upload_dir / str(file_id) / filename
 
-    def create_thread_workdir(self, thread_id: str) -> Path:
-        workdir = settings.threads_dir / thread_id
+    def create_conversation_workdir(self, conversation_id: str) -> Path:
+        workdir = settings.conversations_dir / conversation_id
         workdir.mkdir(parents=True, exist_ok=True)
         return workdir
 
-    def create_thread_step_dir(self, thread_id: str, step: int) -> Path:
-        step_dir = settings.threads_dir / thread_id / f"step_{step}"
+    def create_conversation_step_dir(self, conversation_id: str, step: int) -> Path:
+        step_dir = settings.conversations_dir / conversation_id / f"step_{step}"
         step_dir.mkdir(parents=True, exist_ok=True)
         return step_dir
 
@@ -59,48 +59,48 @@ class LocalStorage:
                 digest.update(chunk)
         return digest.hexdigest()
 
-    def cleanup_thread(self, thread_id: str) -> None:
-        thread_dir = settings.threads_dir / thread_id
-        if thread_dir.exists():
-            shutil.rmtree(thread_dir)
+    def cleanup_conversation(self, conversation_id: str) -> None:
+        conversation_dir = settings.conversations_dir / conversation_id
+        if conversation_dir.exists():
+            shutil.rmtree(conversation_dir)
 
-    def list_expired_threads(self) -> list[str]:
-        """Return thread ids whose workdirs are older than thread_ttl_hours."""
-        threads_dir = settings.threads_dir
-        if not threads_dir.exists():
+    def list_expired_conversations(self) -> list[str]:
+        """Return conversation ids whose workdirs are older than the retention window."""
+        conversations_dir = settings.conversations_dir
+        if not conversations_dir.exists():
             return []
 
-        cutoff = time.time() - settings.thread_ttl_hours * 3600
+        cutoff = time.time() - settings.conversation_ttl_hours * 3600
         expired: list[str] = []
-        for entry in threads_dir.iterdir():
+        for entry in conversations_dir.iterdir():
             if not entry.is_dir():
                 continue
             try:
                 if entry.stat().st_mtime < cutoff:
                     expired.append(entry.name)
             except OSError:
-                logger.warning("Failed to inspect thread workdir: %s", entry.name)
+                logger.warning("Failed to inspect conversation workdir: %s", entry.name)
         return expired
 
-    def cleanup_expired_threads(self) -> int:
-        """Remove thread workdirs older than thread_ttl_hours. Returns count removed."""
+    def cleanup_expired_conversations(self) -> int:
+        """Remove expired conversation workdirs. Returns count removed."""
         removed = 0
-        for thread_id in self.list_expired_threads():
+        for conversation_id in self.list_expired_conversations():
             try:
-                self.cleanup_thread(thread_id)
+                self.cleanup_conversation(conversation_id)
                 removed += 1
-                logger.info("Cleaned up expired thread workdir: %s", thread_id)
+                logger.info("Cleaned up expired conversation workdir: %s", conversation_id)
             except OSError:
-                logger.warning("Failed to clean up thread workdir: %s", thread_id)
+                logger.warning("Failed to clean up conversation workdir: %s", conversation_id)
         return removed
 
     def cleanup_expired_uploads(self) -> list[str]:
-        """Remove uploaded files older than thread_ttl_hours and return removed upload ids."""
+        """Remove uploaded files older than the retention window and return removed upload ids."""
         upload_dir = settings.upload_dir
         if not upload_dir.exists():
             return []
 
-        cutoff = time.time() - settings.thread_ttl_hours * 3600
+        cutoff = time.time() - settings.conversation_ttl_hours * 3600
         removed: list[str] = []
         for entry in upload_dir.iterdir():
             if not entry.is_dir():
@@ -132,7 +132,7 @@ class LocalStorage:
         return settings.max_storage_gb * 1024 * 1024 * 1024
 
     def trim_storage_lru(self) -> int:
-        """Delete oldest upload/thread dirs first until under the configured storage limit."""
+        """Delete oldest upload/conversation dirs first until under the configured storage limit."""
         limit = self.storage_limit_bytes()
         current = self.dir_size_bytes()
         if current <= limit:
@@ -140,7 +140,7 @@ class LocalStorage:
 
         removed = 0
         candidates = []
-        for root in (settings.threads_dir, settings.upload_dir):
+        for root in (settings.conversations_dir, settings.upload_dir):
             if not root.exists():
                 continue
             for entry in root.iterdir():

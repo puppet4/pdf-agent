@@ -13,6 +13,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools._builtins.pdf_to_text import _extract_page_text
+from pdf_agent.tools.filenames import localized_output_name
 
 
 def _render_page_png(pdf_path: Path, page_idx: int, dpi: int = 72) -> Image.Image | None:
@@ -67,7 +68,7 @@ class CompareTool(BaseTool):
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "diff.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "差异对比")
         text_report_path = workdir / "diff_text.json"
 
         color_map = {"red": (255, 0, 0, 120), "yellow": (255, 255, 0, 120), "blue": (0, 100, 255, 120)}
@@ -149,7 +150,7 @@ class CompareTool(BaseTool):
             result = base_rgba.convert("RGB")
             diff_pages.append(result)
 
-            if any(p > 0 for p in mask.getdata()):
+            if mask.getbbox() is not None:
                 diff_count += 1
 
         if not diff_pages:

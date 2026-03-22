@@ -9,6 +9,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class ExtractTool(BaseTool):
@@ -46,7 +47,7 @@ class ExtractTool(BaseTool):
         reporter: ProgressReporter | None = None,
     ) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "extracted.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已提取页面")
 
         with pikepdf.open(inputs[0]) as src:
             total = len(src.pages)

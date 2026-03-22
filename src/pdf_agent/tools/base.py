@@ -10,7 +10,7 @@ from pdf_agent.schemas.tool import ToolManifest
 
 
 class ProgressReporter(Protocol):
-    """Callback for reporting progress within a tool execution."""
+    """Callback for reporting progress within a tool run."""
     def __call__(self, percent: int, message: str = "") -> None: ...
 
 
@@ -42,7 +42,7 @@ class BaseTool(abc.ABC):
         workdir: Path,
         reporter: ProgressReporter | None = None,
     ) -> ToolResult:
-        """Execute the tool and return results."""
+        """Run the tool and return results."""
         ...
 
     @property

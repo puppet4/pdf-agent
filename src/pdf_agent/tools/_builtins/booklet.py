@@ -7,6 +7,7 @@ import pikepdf
 
 from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class BookletTool(BaseTool):
@@ -27,7 +28,7 @@ class BookletTool(BaseTool):
         return {}
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
-        output_path = workdir / "booklet.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "小册子版")
 
         with pikepdf.open(inputs[0]) as src:
             page_count = len(src.pages)

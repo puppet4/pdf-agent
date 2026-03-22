@@ -19,7 +19,7 @@ from pdf_agent.agent.state import AgentState
 from pdf_agent.api.metrics import metrics
 from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, PDFAgentError
-from pdf_agent.external_commands import bind_execution_context
+from pdf_agent.external_commands import bind_conversation_run_context
 from pdf_agent.schemas.tool import ParamSpec, ToolManifest
 from pdf_agent.tools.base import BaseTool
 from pdf_agent.tools.registry import ToolRegistry
@@ -119,45 +119,47 @@ def _allowed_state_paths(state: AgentState) -> set[Path]:
 
 
 # ---------------------------------------------------------------------------
-# SSE progress queue — keyed by thread_id
+# SSE progress queue — keyed by conversation_id at the app layer
 # ---------------------------------------------------------------------------
 
-# Maps thread_id -> queue of (percent, message) progress updates
+# Maps conversation_id -> queue of (percent, message) progress updates
 _progress_queues: dict[str, queue.Queue] = {}
 _progress_lock = threading.Lock()
 
 
-def get_progress_queue(thread_id: str) -> queue.Queue:
+def get_progress_queue(conversation_id: str) -> queue.Queue:
     with _progress_lock:
-        if thread_id not in _progress_queues:
-            _progress_queues[thread_id] = queue.Queue(maxsize=100)
-        return _progress_queues[thread_id]
+        if conversation_id not in _progress_queues:
+            _progress_queues[conversation_id] = queue.Queue(maxsize=100)
+        return _progress_queues[conversation_id]
 
 
-def release_progress_queue(thread_id: str):
+def release_progress_queue(conversation_id: str):
     with _progress_lock:
-        _progress_queues.pop(thread_id, None)
+        _progress_queues.pop(conversation_id, None)
 
 
 # ---------------------------------------------------------------------------
-# Structured execution result
+# Structured tool-run result
 # ---------------------------------------------------------------------------
 
 @dataclass
-class AdaptedToolExecutionResult:
+class AdaptedToolRunResult:
     log: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
     output_files: list[str] = field(default_factory=list)
     raw_output: str = ""
+    elapsed_seconds: float | None = None
 
 
-def parse_tool_result_payload(result_str: str) -> AdaptedToolExecutionResult:
+def parse_tool_result_payload(result_str: str) -> AdaptedToolRunResult:
     """Parse the formatted StructuredTool response back into structured data."""
     for line in result_str.splitlines():
         if line.startswith(_RESULT_JSON_PREFIX):
             raw = line[len(_RESULT_JSON_PREFIX):].strip()
             payload = json.loads(raw)
-            return AdaptedToolExecutionResult(
+            elapsed = payload.get("elapsed_seconds")
+            return AdaptedToolRunResult(
                 log=str(payload.get("log", "") or ""),
                 meta=payload.get("meta", {}) if isinstance(payload.get("meta"), dict) else {},
                 output_files=[
@@ -166,8 +168,9 @@ def parse_tool_result_payload(result_str: str) -> AdaptedToolExecutionResult:
                     if isinstance(path, str) and path
                 ],
                 raw_output=result_str,
+                elapsed_seconds=float(elapsed) if isinstance(elapsed, (int, float)) else None,
             )
-    return AdaptedToolExecutionResult(log=result_str.strip(), raw_output=result_str)
+    return AdaptedToolRunResult(log=result_str.strip(), raw_output=result_str)
 
 
 def _raise_for_error_output(result_str: str) -> None:
@@ -186,7 +189,7 @@ def _state_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
             "orig_name": path.name,
             "mime_type": "",
             "page_count": None,
-            "source": "execution",
+            "source": "conversation_run",
         }
         for index, path in enumerate(paths, start=1)
     ]
@@ -226,8 +229,8 @@ async def _execute_tool_with_state(
         input_paths = input_paths[: manifest.inputs.max]
 
     step = state.get("step_counter", 0)
-    thread_workdir = Path(state.get("thread_workdir", "/tmp"))
-    step_dir = thread_workdir / f"step_{step}"
+    conversation_workdir = Path(state.get("conversation_workdir", "/tmp"))
+    step_dir = conversation_workdir / f"step_{step}"
     step_dir.mkdir(parents=True, exist_ok=True)
 
     params: dict[str, Any] = {}
@@ -238,8 +241,8 @@ async def _execute_tool_with_state(
             params[p.name] = p.default
     validated_params = tool.validate(params)
 
-    thread_id = state.get("configurable", {}).get("thread_id", "") if isinstance(state, dict) else ""
-    prog_queue: queue.Queue | None = get_progress_queue(thread_id) if thread_id else None
+    conversation_id = state.get("configurable", {}).get("thread_id", "") if isinstance(state, dict) else ""
+    prog_queue: queue.Queue | None = get_progress_queue(conversation_id) if conversation_id else None
 
     def reporter(percent: int, message: str = "") -> None:
         if prog_queue:
@@ -252,7 +255,7 @@ async def _execute_tool_with_state(
 
     start = time.perf_counter()
     try:
-        with bind_execution_context(thread_id or None):
+        with bind_conversation_run_context(conversation_id or None):
             if manifest.async_hint:
                 async with _get_semaphore():
                     result = await asyncio.wait_for(
@@ -304,6 +307,7 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
         state: AgentState = kwargs.pop("state", {})
         kwargs.pop("tool_call_id", None)
         progress_reporter = kwargs.pop("progress_reporter", None)
+        start = time.perf_counter()
         try:
             result = await _execute_tool_with_state(
                 tool=tool,
@@ -320,10 +324,12 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
 
         # --- Format result ---
         output_files = [str(f) for f in result.output_files]
+        elapsed_seconds = round(time.perf_counter() - start, 3)
         payload = {
             "log": result.log,
             "meta": result.meta,
             "output_files": output_files,
+            "elapsed_seconds": elapsed_seconds,
         }
         parts = []
         if result.log:
@@ -382,11 +388,11 @@ async def invoke_adapted_tool(
     tool_name: str,
     input_paths: list[Path],
     params: dict[str, Any],
-    thread_workdir: Path,
+    conversation_workdir: Path,
     step_counter: int,
-    thread_id: str,
+    conversation_id: str,
     progress_reporter=None,
-) -> AdaptedToolExecutionResult:
+) -> AdaptedToolRunResult:
     """Execute a tool through the LangChain StructuredTool adapter path."""
     tool_map = get_adapted_tool_map(registry)
     lc_tool = tool_map.get(tool_name)
@@ -397,13 +403,13 @@ async def invoke_adapted_tool(
     state = {
         "files": _state_file_entries(resolved_paths),
         "current_files": [str(path) for path in resolved_paths],
-        "thread_workdir": str(thread_workdir),
+        "conversation_workdir": str(conversation_workdir),
         "step_counter": step_counter,
-        "configurable": {"thread_id": thread_id},
+        "configurable": {"thread_id": conversation_id},
     }
     result_str = await lc_tool.coroutine(
         state=state,
-        tool_call_id=f"execution:{thread_id}:{step_counter}:{tool_name}",
+        tool_call_id=f"conversation_run:{conversation_id}:{step_counter}:{tool_name}",
         input_file_paths=[str(path) for path in resolved_paths],
         progress_reporter=progress_reporter,
         **(params or {}),

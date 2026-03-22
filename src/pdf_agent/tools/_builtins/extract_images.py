@@ -34,8 +34,10 @@ class ExtractImagesTool(BaseTool):
                 for image_index, (_, image_obj) in enumerate(page.images.items(), start=1):
                     pdf_image = pikepdf.PdfImage(image_obj)
                     prefix = workdir / f"page_{page_index:04d}_image_{image_index:03d}"
-                    suffix = pdf_image.extract_to(fileprefix=str(prefix))
-                    output_files.append(Path(f"{prefix}{suffix}"))
+                    extracted = Path(pdf_image.extract_to(fileprefix=str(prefix)))
+                    if not extracted.is_absolute():
+                        extracted = Path(f"{prefix}{extracted}")
+                    output_files.append(extracted)
                 if reporter:
                     reporter(int(page_index / total * 100))
         if not output_files:

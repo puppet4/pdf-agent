@@ -13,6 +13,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class WatermarkImageTool(BaseTool):
@@ -95,7 +96,7 @@ class WatermarkImageTool(BaseTool):
         elif wm_img.mode != "RGB":
             wm_img = wm_img.convert("RGBA")
 
-        output_path = workdir / "watermarked.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已加图片水印")
 
         with pikepdf.open(pdf_path) as pdf:
             total = len(pdf.pages)

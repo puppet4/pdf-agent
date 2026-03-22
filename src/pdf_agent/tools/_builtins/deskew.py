@@ -12,6 +12,7 @@ from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 def _detect_skew(image_path: Path) -> float | None:
@@ -99,7 +100,7 @@ class DeskewTool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "pdftoppm (poppler-utils) is not installed")
 
         params = self.validate(params)
-        output_path = workdir / "deskewed.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已校正倾斜")
         corrections: list[dict] = []
 
         with tempfile.TemporaryDirectory() as td:

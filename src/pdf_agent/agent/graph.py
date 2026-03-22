@@ -14,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, StateGraph
 
-from pdf_agent.agent.prompt import build_system_prompt
+from pdf_agent.agent.prompt import build_system_prompt, prepare_messages_for_model
 from pdf_agent.agent.state import AgentState, FileInfo
 from pdf_agent.agent.tools_adapter import get_adapted_tool_map, parse_tool_result_payload
 from pdf_agent.config import settings
@@ -104,7 +104,7 @@ def _make_agent_node(model_with_tools: ChatOpenAI):
                 except Exception:
                     messages = recent_msgs
 
-        messages = [SystemMessage(content=sys_prompt)] + messages
+        messages = [SystemMessage(content=sys_prompt)] + prepare_messages_for_model(messages)
 
         response = await model_with_tools.ainvoke(messages)
         return {"messages": [response]}
@@ -147,16 +147,30 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
             tool_args["state"] = state
             tool_args["tool_call_id"] = call_id
 
+            parsed_result = None
             try:
                 result_str = await lc_tool.coroutine(**tool_args)
+                parsed_result = parse_tool_result_payload(result_str)
             except Exception as e:
                 logger.exception("Tool %s raised exception", tool_name)
                 result_str = f"Error: {e}"
 
-            new_messages.append(ToolMessage(content=result_str, tool_call_id=call_id))
+            new_messages.append(
+                ToolMessage(
+                    content=result_str,
+                    tool_call_id=call_id,
+                    name=tool_name,
+                    artifact={
+                        "tool": tool_name,
+                        "output_files": parsed_result.output_files if parsed_result else [],
+                        "meta": parsed_result.meta if parsed_result else {},
+                        "elapsed_seconds": parsed_result.elapsed_seconds if parsed_result else None,
+                    },
+                )
+            )
 
             # Parse output files from result string
-            output_files = parse_tool_result_payload(result_str).output_files
+            output_files = parsed_result.output_files if parsed_result else parse_tool_result_payload(result_str).output_files
             if output_files:
                 latest_output_files = output_files
                 for fp in output_files:

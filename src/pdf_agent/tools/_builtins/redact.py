@@ -16,6 +16,7 @@ from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class RedactTool(BaseTool):
@@ -51,7 +52,7 @@ class RedactTool(BaseTool):
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "redacted.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已脱敏")
         with pikepdf.open(inputs[0]) as pdf:
             page_count = len(pdf.pages)
             target_pages = set(parse_page_range(params["page_range"], page_count))

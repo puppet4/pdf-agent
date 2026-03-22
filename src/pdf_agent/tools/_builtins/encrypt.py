@@ -8,6 +8,7 @@ import pikepdf
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class EncryptTool(BaseTool):
@@ -79,7 +80,7 @@ class EncryptTool(BaseTool):
         reporter: ProgressReporter | None = None,
     ) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "encrypted.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已加密")
 
         permissions = pikepdf.Permissions(
             print_lowres=params["allow_print"],

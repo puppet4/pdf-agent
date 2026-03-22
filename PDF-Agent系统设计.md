@@ -1,10 +1,10 @@
 # PDF Agent（对标 Stirling-PDF）PRD + 系统设计书（单机/内网工具版）
 
-> **目标**：实现与 Stirling-PDF 同等级别的 PDF 工具集合（功能矩阵可对齐），并以自然语言对话作为唯一主交互；旧的手动工具、工作流、执行管理 HTTP 入口不再保留为产品接口。
+> **目标**：实现与 Stirling-PDF 同等级别的 PDF 工具集合（功能矩阵可对齐），并以自然语言对话作为唯一主交互；旧的手动工具、独立工作流、执行管理 HTTP 入口不再保留为产品接口。
 >
 > **范围声明**：不考虑多租户、登录、RBAC、配额等；专注 **PDF 处理技术** 与 **工程落地**。
 >
-> **交付导向**：本文件既是 PRD，也是系统设计书，面向“能实施”的产品级方案：包含模块边界、工具插件化、参数规范、接口、数据模型、任务编排、部署、测试策略与里程碑。
+> **交付导向**：本文件既是 PRD，也是系统设计书，面向“能实施”的产品级方案：包含模块边界、工具插件化、参数规范、接口、数据模型、对话编排、部署、测试策略与里程碑。
 
 ---
 
@@ -23,7 +23,7 @@
   - [2.2 核心设计原则](#22-核心设计原则)
   - [2.3 关键模块设计](#23-关键模块设计)
   - [2.4 工具插件化规范（Manifest + Runtime）](#24-工具插件化规范manifest--runtime)
-  - [2.5 任务与工作流（Execution/Pipeline）](#25-任务与工作流executionpipeline)
+  - [2.5 对话执行流（Conversation Runtime）](#25-对话执行流conversation-runtime)
   - [2.6 文件存储与清理策略](#26-文件存储与清理策略)
   - [2.7 数据库设计（建议 PostgreSQL）](#27-数据库设计建议-postgresql)
   - [2.8 API 设计（REST + SSE）](#28-api-设计rest--sse)
@@ -49,9 +49,9 @@
 **产品形态**：Chat-first Web 应用（自托管），以“上传文件 + 对话处理 PDF”为核心路径。  
 **核心价值**：
 - 覆盖 PDF 全量处理需求（对话入口驱动内部工具执行）
-- 重任务（OCR/转换/压缩/批处理）异步化、可追踪
+- 用户只需要“上传文件 + 用自然语言说明要做什么”
 - 本地/内网运行，文件不出域
-- 工具执行可审计、可复现（便于排障与回放）
+- 工具执行过程可观察、可追踪、可复现（便于排障与回放）
 
 ## 1.2 目标用户与典型场景
 **目标用户**：
@@ -79,15 +79,14 @@
 
 ## 1.4 需求范围与分期
 ### 1.4.1 本期（产品级基础 + 全量工具框架）
-- 工具框架：Manifest 驱动的动态表单 + 后端插件注册
-- 任务系统：Execution、进度、日志、取消、重试（重试可二期）
-- 文件系统：上传/下载/结果、清理策略
+- 对话主链路：上传文件、创建会话、发送消息、流式返回结果、下载产物
+- 工具框架：后端插件注册 + LangChain tool adapter
+- 文件系统：上传/下载/会话产物、清理策略
 - 核心引擎集成：qpdf/pikepdf、poppler、ocrmypdf、ghostscript、libreoffice（可按需）
 
 ### 1.4.2 后续增强（不涉及权限多租户）
 - 复杂可视化：页缩略图、拖拽重排、对比可视化
 - 目标体积压缩策略（多轮自动）
-- 工作流模板管理（保存 pipeline）
 - 更强 OCR 预处理（去噪、二值化、版面分析）
 
 ## 1.5 功能清单（对标 Stirling-PDF 的全量能力域）
@@ -172,23 +171,19 @@
 - 像素差异（渲染后比对）
 - 统计：页数/尺寸/是否扫描件/是否加密/是否有文本层
 
-### J. 批处理与工作流（Batch & Workflow）
+### J. 批处理与多步处理（Batch & Multi-step）
 - 对多个文件执行同一工具（batch）
-- pipeline：多步骤串联
-- 模板（可选）：保存常用 pipeline
+- 多步骤串联处理，由对话驱动内部工具链完成
 - 并发控制：重任务与轻任务分队列
 
 ## 1.6 通用交互与页面
-- 首页（工具台）
-  - 上传区（拖拽、多文件）
-  - 工具选择（分类导航）
-  - 参数表单（动态渲染）
-  - 执行按钮 → 创建 Execution
-- Agent 模式（可选入口）
-  - 自然语言 → 生成计划（plan preview）→ 用户确认 → 创建 Execution
-- 任务中心
-  - 列表：状态、进度、耗时、结果下载
-  - 详情：steps、日志、错误、输入输出
+- 主页面采用 Conversation-First 交互
+  - 左侧：会话列表
+  - 主区：聊天区，用户直接描述要对 PDF 做什么
+  - 下方：上传按钮、已选文件、消息输入框
+  - 结果区：当前会话产物列表与下载入口
+- 不再提供独立“工具台”“工作流页”“任务中心”作为产品主入口
+- 多步处理直接在当前对话里完成，不要求用户先理解底层工具或执行计划
 
 ## 1.7 非功能需求
 - 稳定性：任务隔离；单任务失败不影响整体
@@ -206,33 +201,31 @@
 - OCR 输出可搜索（抽样验证）
 - 压缩输出体积降低且可打开
 - 失败任务可定位到 tool/step，含错误码与日志摘要
-- 批处理可运行，任务队列不会把 API 服务拖死
+- 批处理可运行，长耗时处理不会把 API 服务拖死
 
 ---
 
 # 2. 系统设计书（System Design）
 
 ## 2.1 架构概览
-**方案A**：React + FastAPI + LangChain + LangGraph + PostgreSQL + Local Storage  
-**执行基础设施**：Worker + 本地队列，必要时可选 Celery/Redis
+**方案A**：React + FastAPI + LangChain + LangGraph + PostgreSQL + Local Storage
 
 组件：
 - **Frontend**：会话列表、输入文件选择、对话区、结果下载
-- **API Server**：上传、会话接口、Agent 对话流、内部执行接口、下载
+- **API Server**：上传、会话接口、Agent 对话流、产物下载
 - **LangChain Planner**：将自然语言请求转成结构化 plan
 - **LangGraph Runtime**：负责 Agent 对话、多步工具调用与状态推进
-- **Execution Runtime**：按 execution plan 执行结构化 step，并复用同一套 LangChain tool adapter
-- **Redis（可选）**：任务队列 broker（启用 Celery 时使用）
-- **PostgreSQL**：execution 元数据、文件元数据、审计
-- **Storage**：本地磁盘（uploads/results/tmp），可选 MinIO
+- **Tool Adapter / Command Runner**：把 LangChain tool 调用落到受控工具执行链与外部命令封装
+- **PostgreSQL**：文件元数据、LangGraph checkpoint、审计
+- **Storage**：本地磁盘（uploads/conversations/tmp）
 
 ## 2.2 核心设计原则
-1. **Manifest 驱动 UI**：工具多也能控住复杂度
-2. **执行确定性**：LLM 通过 LangChain 只生成结构化计划，实际执行仍由受控工具层完成
+1. **Conversation-First**：用户面对的是会话，不是工具台、工作流面板或任务中心
+2. **执行确定性**：LLM 通过 LangChain/LangGraph 驱动工具调用，实际执行仍由受控工具层完成
 3. **多引擎并存**：用正确的引擎覆盖正确能力（qpdf/poppler/ocr/gs/libreoffice）
 4. **外部命令安全**：不拼 shell；限制超时；固定工作目录
-5. **统一编排**：聊天、计划预览、任务执行共用 LangChain/LangGraph 语义，不维护第二套自实现规划器
-6. **可追溯**：Execution 全链路记录，必要信息直接收敛在 execution record 中
+5. **统一编排**：对话、状态、工具调用统一复用 LangChain/LangGraph 语义，不维护第二套自实现规划器
+6. **可追溯**：会话消息、工具执行事件、输出产物应可定位与回放
 
 ### 2.2.1 当前阶段的最终目标架构
 为避免继续架构膨胀，当前阶段的目标架构固定为四层：
@@ -240,14 +233,14 @@
 - **API / Orchestration**
   - 负责上传、对话、会话结果查询与下载
   - 不承载 PDF 处理实现细节
-- **Execution Runner**
-  - 负责 execution 排队、启动、取消、进度推进、错误收敛、结果落盘
+- **Conversation Runtime**
+  - 由 LangGraph 管理会话状态、多步调用、流式事件输出
   - 是唯一允许编排多 step 执行的地方
 - **Tool Plugins**
   - 每个工具只做输入校验、参数归一化、执行、产物输出
-  - 不自行实现队列、事件流、数据库写入
+  - 不自行实现对话状态、事件流、数据库写入
 - **Storage**
-  - 只负责文件和 execution 元数据持久化
+  - 只负责文件和最小必要元数据持久化
   - 不扩展出新的业务编排抽象
 
 当前阶段不再引入新的重型任务模型、事件总线、独立编排 DSL 或额外微服务。
@@ -257,30 +250,27 @@
 - 启动时加载所有工具插件
 - 提供运行时查找 tool：`registry.get(tool_name)`
 
-### 2.3.2 Execution Service（执行服务）
-- 接收用户请求（表单 or agent）
-- 生成 plan（表单=单步 plan，agent=LangChain 结构化多步 plan）
-- plan JSON Schema 校验
-- 创建 execution record
-- 投递本地任务或 Celery 任务（可选）
+### 2.3.2 Conversation Service（会话服务）
+- 创建/读取/删除会话
+- 读取 LangGraph 持久化消息
+- 关联上传文件与当前会话目录
+- 聚合当前会话产物列表
 
-### 2.3.3 Worker Orchestrator（编排器）
-- 读取 execution plan
+### 2.3.3 LangGraph Runtime（编排器）
+- 接收用户消息与附加文件
 - 通过 LangChain `StructuredTool` adapter 统一执行 step
-- 逐 step 执行：
-  - validate params
-  - run tool（产生 output）
-  - 更新 execution logs / outputs / progress
+- 在同一会话内逐步推进：
+  - 理解用户意图
+  - 调用合适工具
+  - 产出流式 token / tool_start / tool_progress / tool_end 事件
 - 失败处理：
-  - 记录错误码、stderr 摘要
-  - 标记 execution FAILED
-- 取消处理：
-  - execution 标记 CANCELED；必要时 kill 外部进程
+  - 返回结构化错误事件
+  - 保留可排查的日志与产物信息
 
 ### 2.3.4 模块边界约束
 - `api/*`：只做请求编解码、调用 service、返回响应；不要沉积工具执行细节
 - `agent/*`：只负责 LangChain/LangGraph 的聊天与 tool adapter；不要长出第二套并行编排体系
-- `tools/_builtins/*`：只关心工具本身；不要直接写 execution 状态、不要直接操作 SSE、不要直接写数据库
+- `tools/_builtins/*`：只关心工具本身；不要直接写会话状态、不要直接操作 SSE、不要直接写数据库
 - `external_commands.py`：是唯一的外部命令执行入口；不要再在活跃运行路径里散落新的 `subprocess.run(...)`
 - `db/models.py`：当前只保留 `FileRecord` 作为核心持久化对象；不为“也许以后有用”预埋复杂实体
 
@@ -304,10 +294,10 @@
 - `meta`（页数、大小、耗时）
 - `log`（摘要）
 
-## 2.5 任务与工作流（Execution/Pipeline）
+## 2.5 对话执行流（Conversation Runtime）
 ### 2.5.0 Agent 规划与执行
 - `Agent chat`：由 LangGraph StateGraph 驱动，对话中按需调用 LangChain tools
-- 不再保留 `Plan preview / confirm` 或 workflow 独立 HTTP 入口
+- 不再保留 `Plan preview / confirm` 或独立工作流 HTTP 入口
 - 多步 PDF 处理直接在对话中完成，并把产物写入当前会话目录
 
 ### 2.5.1 Plan Schema（建议）
@@ -340,13 +330,17 @@
 目录：
 
 - `data/uploads/{file_id}/source.pdf`
-- `data/executions/{execution_id}/work/`（中间产物）
-- `data/executions/{execution_id}/output/`（最终产物）
+- `data/conversations/{conversation_id}/step_{n}/...`（当前实现中的会话产物目录）
+
+说明：
+
+- 当前实现层仅在 LangGraph 边界继续使用 `thread_id` 作为兼容命名
+- 这是内部实现细节；产品与 API 表层统一使用 `conversation`
 
 清理：
 
-- 定时清理过期 execution 目录（保留 N 天）
-- 清理孤儿 uploads（无 execution 引用）
+- 定时清理过期会话目录（保留 N 天）
+- 清理孤儿 uploads（无活跃会话引用）
 - 限制总容量（超限按 LRU 清理，或拒绝新任务）
 
 ## 2.7 数据库设计（建议 PostgreSQL）
@@ -364,47 +358,37 @@
 - storage_path
 - created_at
 
-**executions**
+当前阶段不单独维护独立的“执行记录表”。
 
-- id (uuid)
-- status (PENDING/RUNNING/SUCCESS/FAILED/CANCELED)
-- mode (FORM/AGENT)
-- instruction (nullable)
-- plan_json
-- progress_int (0~100)
-- active_tool (nullable)
-- logs_json
-- outputs_json
-- error_code (nullable)
-- error_message (nullable)
-- created_at / updated_at
-- result_path (nullable)
-- result_type (pdf/zip/text/json)
+- 会话消息与状态由 LangGraph checkpointer 持久化
+- 文件元数据由 `files` 表维护
+- 若后续产品形态真的变成任务平台，再重新引入显式执行记录模型
 
 索引：
 
-- executions(status, created_at)
 - files(sha256)（可选去重）
 
 ## 2.8 API 设计（REST + SSE）
 
-- `POST /api/files`：上传
-- `GET /api/files/{id}/download`：下载原文件
-- `POST /api/agent/chat`：对话入口（SSE 返回 token / step / result）
-- `GET /api/agent/threads`：会话列表
-- `GET /api/agent/threads/{id}`：会话详情
-- `GET /api/agent/threads/{id}/files`：当前会话结果文件
-- `GET /api/agent/threads/{id}/files/{file_path}`：下载当前会话结果文件
-- `DELETE /api/agent/threads/{id}`：删除会话
 - `POST /api/files`：上传输入文件
+- `GET /api/files`：文件列表
 - `GET /api/files/{id}/download`：下载原始上传文件
+- `DELETE /api/files/{id}`：删除上传文件
+- `POST /api/conversations`：创建空会话
+- `GET /api/conversations`：会话列表
+- `GET /api/conversations/{conversation_id}`：会话详情与消息历史
+- `DELETE /api/conversations/{conversation_id}`：删除会话
+- `GET /api/conversations/{conversation_id}/artifacts`：当前会话产物列表
+- `GET /api/conversations/{conversation_id}/artifacts/{artifact_path}`：下载当前会话产物
+- `POST /api/conversations/{conversation_id}/messages`：发送消息并以 SSE 流式返回 token / tool_start / tool_progress / tool_end / done
 
 ## 2.9 前端设计（Conversation-First）
 
 - 左侧：会话列表，仅呈现对话历史
 - 主区：聊天区，用户通过自然语言描述 PDF 目标结果
-- 右侧：输入文件选择 + 当前会话结果下载
-- 默认 UI 不直接暴露工具、工作流、执行管理入口
+- 下方：输入文件选择 + 当前输入文件 chips + 发送入口
+- 结果区：当前会话结果下载
+- 默认 UI 不直接暴露手动工具页、独立工作流页、执行管理入口
 - 服务 HTTP 表层只保留“上传 + 对话 + 结果下载”主链路
 - 工具与执行能力保留在内部运行时，不再提供独立手动 HTTP 入口
 - 少量专用页面（后期，如确有必要）：
@@ -430,15 +414,15 @@
   - 固定 workdir，禁止用户输入路径
   - 输出路径白名单
 - 超时与取消：长任务可 kill 子进程
-- 失败隔离：step 失败只影响该 execution
+- 失败隔离：step 失败只影响当前会话内的本次处理
 - 资源限制：并发、最大文件大小、最大页数、磁盘水位
 
 ## 2.12 可观测性与运维
 
-- 结构化日志：包含 execution_id、step/tool、status、error_code
+- 结构化日志：包含 request_id、conversation_id、step/tool、status、error_code
 - 指标：
-  - execution 数量、失败率、平均耗时
   - 对话请求数量、失败率、平均耗时
+  - 工具调用数量、失败率、平均耗时
 - 健康检查：
   - `/healthz`（API）
   - agent 初始化状态
@@ -483,9 +467,8 @@
 **阶段0：框架可运行**
 
 - 文件上传/下载
-- Execution 模型 + LangChain/LangGraph 编排主链路
 - 对话式 PDF 处理主链路（最小）
-- Worker / 队列基础设施（本地优先，Celery 可选）
+- LangChain/LangGraph 编排主链路
 
 **阶段1：高频核心工具**
 
@@ -505,7 +488,7 @@
 
 - N-up、booklet、page size normalize
 - compare（text + pixel）
-- batch pipeline 模板化
+- batch 多步处理体验完善
 
 ------
 
@@ -532,10 +515,10 @@
 - `ENGINE_EXEC_TIMEOUT`
 - `ENGINE_EXEC_FAILED`
 - `OUTPUT_GENERATION_FAILED`
-- `EXECUTION_CANCELED`
+- `CONVERSATION_RUN_CANCELED`
 
 ## 3.3 输出命名规范
 
-- 单输出：`{execution_id}_{tool_or_pipeline}.pdf`
+- 单输出：`{conversation_id}_{tool_or_pipeline}.pdf`
 - 多输出：zip 内部 `{origName}_{tool}_{index}.pdf`
 - 图片输出：`page_{pageNo}.png`

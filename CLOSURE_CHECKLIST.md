@@ -3,7 +3,7 @@
 ## Current Status
 
 - Runtime architecture is frozen on `FastAPI + LangChain/LangGraph + local storage`.
-- Product surface is conversation-first and no longer exposes legacy execution management HTTP entrypoints.
+- Product surface is conversation-first and no longer exposes legacy manual-operation HTTP entrypoints.
 - Reduced smoke-oriented suite is green: `16 passed`.
 
 ## Recommended Commit Split
@@ -37,8 +37,8 @@ Also include:
 
 Scope:
 - Move built-in tools onto the shared command runner
-- Close remaining execution cancellation gaps
-- Keep tool behavior aligned to manifest-driven execution
+- Close remaining conversation-run cancellation gaps
+- Keep tool behavior aligned to manifest-driven tool runs
 
 Primary files:
 - `src/pdf_agent/tools/_builtins/compress.py`
@@ -67,7 +67,7 @@ Optional to include in the same commit if desired:
 
 Scope:
 - Collapse the product surface into conversation-first PDF editing
-- Remove legacy manual tool/workflow/execution HTTP entrypoints
+- Remove legacy manual-operation HTTP entrypoints
 - Freeze the design doc on the final target architecture
 - Keep only smoke-oriented tests plus key runtime acceptance coverage
 
@@ -105,12 +105,12 @@ Expected current result:
 - Upload a PDF from the frontend
 - Send one natural-language request from the main chat flow
 - Send one follow-up instruction in the same conversation
-- Start a long-running execution and cancel it
+- Start a long-running PDF operation and cancel it
 - Verify conversation output, result download, output download, and inline error display
 
 ## Freeze Rules
 
 - Do not reintroduce `Job/Step/Artifact`
-- Do not add a second planner or executor path
+- Do not add a second planner or runtime path
 - Do not add new raw `subprocess.run(...)` calls to active runtime paths
 - Do not expand the test suite back into large implementation-coupled regression coverage

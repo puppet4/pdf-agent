@@ -8,6 +8,8 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
+from pdf_agent.tools.libreoffice import run_libreoffice_conversion
 
 
 class PdfToHtmlTool(BaseTool):
@@ -53,7 +55,7 @@ class PdfToHtmlTool(BaseTool):
     def _run_pdftohtml(self, bin_path: str, pdf_path: Path, workdir: Path, params: dict, reporter) -> ToolResult:
         if reporter:
             reporter(10, "Converting with pdftohtml...")
-        output_stem = workdir / pdf_path.stem
+        output_stem = workdir / localized_output_name(pdf_path, "转HTML", ext="")
         cmd = [bin_path, "-noframes", "-nodrm"]
         if params["single_page"]:
             cmd.append("-s")  # single HTML file
@@ -61,7 +63,7 @@ class PdfToHtmlTool(BaseTool):
         run_command(cmd)
 
         # Find output file
-        html_files = list(workdir.glob("*.html")) + list(workdir.glob("*.htm"))
+        html_files = sorted(workdir.glob(f"{output_stem.name}*.html")) + sorted(workdir.glob(f"{output_stem.name}*.htm"))
         if not html_files:
             raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, "pdftohtml produced no output")
 
@@ -76,9 +78,17 @@ class PdfToHtmlTool(BaseTool):
     def _run_libreoffice(self, lo_bin: str, pdf_path: Path, workdir: Path, reporter) -> ToolResult:
         if reporter:
             reporter(10, "Converting with LibreOffice...")
-        run_command([lo_bin, "--headless", "--convert-to", "html", "--outdir", str(workdir), str(pdf_path)])
+        success, failure_reason = run_libreoffice_conversion(
+            lo_bin,
+            convert_to="html",
+            input_path=pdf_path,
+            outdir=workdir,
+            profile_dir=workdir / ".libreoffice-profile",
+        )
+        if not success:
+            raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, failure_reason or "LibreOffice failed to convert to HTML")
 
-        output_path = workdir / (pdf_path.stem + ".html")
+        output_path = workdir / localized_output_name(pdf_path, "转HTML", ext=".html")
         if not output_path.exists():
             raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, "LibreOffice produced no HTML file")
 

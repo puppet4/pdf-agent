@@ -6,6 +6,7 @@ from pathlib import Path
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 class PdfToMarkdownTool(BaseTool):
@@ -42,7 +43,7 @@ class PdfToMarkdownTool(BaseTool):
 
         params = self.validate(params)
         workdir.mkdir(parents=True, exist_ok=True)
-        output_path = workdir / "output.md"
+        output_path = workdir / localized_output_name(inputs[0], "转Markdown", ext=".md")
 
         if reporter:
             reporter(10, "Extracting text...")

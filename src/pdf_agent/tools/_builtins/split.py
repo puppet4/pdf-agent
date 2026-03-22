@@ -9,6 +9,7 @@ import pikepdf
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name, localized_sequence_name, sanitize_filename_part
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 
 
@@ -34,7 +35,13 @@ class SplitTool(BaseTool):
                     name="page_range",
                     label="页范围",
                     type="page_range",
-                    description="拆分模式为 range 时使用，如 1-3,5,7-9",
+                    description="拆分模式为 range 时使用，单个输出文件的页范围，如 1-3,5,7-9",
+                ),
+                ParamSpec(
+                    name="page_groups",
+                    label="分组页范围",
+                    type="string",
+                    description="拆分模式为 range 时可选。多个输出文件的页范围，使用 | 分隔，如 1|2-3|4,6",
                 ),
                 ParamSpec(
                     name="chunk_size",
@@ -55,6 +62,7 @@ class SplitTool(BaseTool):
         return {
             "mode": mode,
             "page_range": params.get("page_range", ""),
+            "page_groups": str(params.get("page_groups", "") or "").strip(),
             "chunk_size": int(params.get("chunk_size", 1)),
         }
 
@@ -74,19 +82,32 @@ class SplitTool(BaseTool):
             mode = params["mode"]
 
             if mode == "range":
-                pages = parse_page_range(params["page_range"], total)
-                out = pikepdf.Pdf.new()
-                for idx in pages:
-                    out.pages.append(src.pages[idx])
-                out_path = workdir / "split_range.pdf"
-                out.save(out_path)
-                output_files.append(out_path)
+                page_groups = _parse_page_groups(params["page_groups"])
+                if page_groups:
+                    for group_index, group_range in enumerate(page_groups, start=1):
+                        pages = parse_page_range(group_range, total)
+                        out = pikepdf.Pdf.new()
+                        for idx in pages:
+                            out.pages.append(src.pages[idx])
+                        out_path = workdir / localized_sequence_name(src_path, "按范围拆分", group_index)
+                        out.save(out_path)
+                        output_files.append(out_path)
+                        if reporter:
+                            reporter(int(group_index / len(page_groups) * 100))
+                else:
+                    pages = parse_page_range(params["page_range"], total)
+                    out = pikepdf.Pdf.new()
+                    for idx in pages:
+                        out.pages.append(src.pages[idx])
+                    out_path = workdir / localized_output_name(src_path, "按范围拆分")
+                    out.save(out_path)
+                    output_files.append(out_path)
 
             elif mode == "each_page":
                 for i in range(total):
                     out = pikepdf.Pdf.new()
                     out.pages.append(src.pages[i])
-                    out_path = workdir / f"page_{i + 1:04d}.pdf"
+                    out_path = workdir / localized_output_name(src_path, f"第{i + 1:04d}页")
                     out.save(out_path)
                     output_files.append(out_path)
                     if reporter:
@@ -99,7 +120,7 @@ class SplitTool(BaseTool):
                     for i in range(chunk_start, min(chunk_start + chunk_size, total)):
                         out.pages.append(src.pages[i])
                     chunk_idx = chunk_start // chunk_size + 1
-                    out_path = workdir / f"chunk_{chunk_idx:04d}.pdf"
+                    out_path = workdir / localized_sequence_name(src_path, "分块", chunk_idx)
                     out.save(out_path)
                     output_files.append(out_path)
 
@@ -111,8 +132,10 @@ class SplitTool(BaseTool):
                     out = pikepdf.Pdf.new()
                     for i in range(start_page, end_page + 1):
                         out.pages.append(src.pages[i])
-                    safe_title = _slugify(title) or f"bookmark_{split_index:04d}"
-                    out_path = workdir / f"{split_index:04d}_{safe_title}.pdf"
+                    safe_title = sanitize_filename_part(title) or f"书签_{split_index:04d}"
+                    out_path = workdir / (
+                        f"{sanitize_filename_part(src_path.stem)}_书签_{split_index:04d}_{safe_title}.pdf"
+                    )
                     out.save(out_path)
                     output_files.append(out_path)
                     if reporter:
@@ -163,6 +186,10 @@ def _outline_page_index(item, page_map: dict[tuple[int, int], int]) -> int | Non
         if objgen is not None:
             return page_map.get(objgen)
     return None
+
+
+def _parse_page_groups(value: str) -> list[str]:
+    return [part.strip() for part in value.split("|") if part.strip()]
 
 
 def _slugify(value: str) -> str:

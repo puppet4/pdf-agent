@@ -9,6 +9,7 @@ from PIL import Image
 from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 
 def _is_blank(page: pikepdf.Page, threshold: float = 0.99) -> bool:
@@ -38,9 +39,12 @@ def _is_blank(page: pikepdf.Page, threshold: float = 0.99) -> bool:
             if not out.exists():
                 return False
             img = Image.open(out).convert("L")
-            pixels = list(img.getdata())
-            white = sum(1 for p in pixels if p > 200)
-            return (white / len(pixels)) >= threshold if pixels else False
+            histogram = img.histogram()
+            pixel_count = sum(histogram)
+            if pixel_count == 0:
+                return False
+            white = sum(histogram[201:])
+            return (white / pixel_count) >= threshold
     except Exception:
         return False
 
@@ -81,7 +85,7 @@ class RemoveBlankPagesTool(BaseTool):
         reporter: ProgressReporter | None = None,
     ) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "no_blank_pages.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已删除空白页")
 
         with pikepdf.open(inputs[0]) as pdf:
             total = len(pdf.pages)

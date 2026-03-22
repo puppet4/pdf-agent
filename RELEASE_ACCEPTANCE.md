@@ -98,14 +98,14 @@ Check:
 
 ```bash
 curl -fsS http://127.0.0.1:8000/healthz
-curl -fsS http://127.0.0.1:8000/metrics | grep pdf_agent_executions_total
+curl -fsS http://127.0.0.1:8000/metrics | grep pdf_agent_conversation_runs_total
 ```
 
 Expected:
 
 - health endpoint responds
-- metrics include `pdf_agent_executions_total`
-- metrics do not include old `pdf_agent_jobs_total`
+- metrics include `pdf_agent_conversation_runs_total`
+- metrics do not include retired legacy counters
 
 ## 7. Release Decision
 
@@ -114,10 +114,10 @@ Release is acceptable if:
 - baseline tests pass
 - upload / conversation flows all work
 - downloads work
-- no visible `job` terminology remains in the active UI
-- no visible `tools/workflows/executions` product navigation remains in the active UI
+- no visible legacy queue/platform terminology remains in the active UI
+- no visible legacy manual-operation style product navigation remains in the active UI
 - the main landing surface is chat-first
-- legacy manual tool / workflow / execution HTTP entrypoints are gone from the active service surface
+- legacy manual-operation HTTP entrypoints are gone from the active service surface
 - no blocking runtime error appears in logs
 
 ## Notes

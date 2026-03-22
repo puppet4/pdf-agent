@@ -13,6 +13,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
+from pdf_agent.tools.filenames import localized_output_name
 
 # Register CJK font for Chinese watermark support
 pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
@@ -102,7 +103,7 @@ class WatermarkTextTool(BaseTool):
         reporter: ProgressReporter | None = None,
     ) -> ToolResult:
         params = self.validate(params)
-        output_path = workdir / "watermarked.pdf"
+        output_path = workdir / localized_output_name(inputs[0], "已加文字水印")
 
         color_map = {
             "gray": (0.5, 0.5, 0.5),
