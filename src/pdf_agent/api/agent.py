@@ -24,6 +24,7 @@ from pdf_agent.agent.tools_adapter import parse_tool_result_payload
 from pdf_agent.config import settings
 from pdf_agent.db import async_session_factory
 from pdf_agent.db.models import FileRecord
+from pdf_agent.services import FileService
 
 logger = logging.getLogger(__name__)
 
@@ -75,17 +76,16 @@ async def _resolve_uploaded_files(file_ids: list[str]) -> list[FileInfo]:
         return []
     files: list[FileInfo] = []
     async with async_session_factory() as session:
+        svc = FileService(session)
         for fid in file_ids:
             try:
                 parsed_id = uuid.UUID(fid)
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=f"Invalid file_id: {fid}") from exc
-            result = await session.execute(
-                select(FileRecord).where(FileRecord.id == parsed_id)
-            )
-            record = result.scalar_one_or_none()
-            if record is None:
-                raise HTTPException(status_code=404, detail=f"File {fid} not found")
+            try:
+                record = await svc.get(parsed_id)
+            except Exception as exc:
+                raise HTTPException(status_code=404, detail=f"File {fid} not found") from exc
             if not Path(record.storage_path).exists():
                 raise HTTPException(status_code=404, detail=f"File {fid} not on disk")
             files.append(FileInfo(

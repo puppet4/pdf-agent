@@ -36,10 +36,15 @@ _PAGE_RANGE_TOOLS = {
     "redact",
 }
 _WATERMARKED_NAME_RE = re.compile(r"_(已加文字水印|已加图片水印)(?:\.[^.]+)?$", re.IGNORECASE)
+_EXPLICIT_HINTS_RE = re.compile(r"\[Normalized intent hints\]\s*(?P<body>(?:\n?- .+)+)", re.IGNORECASE)
 
 
 def build_intent_hints(message: str, selected_inputs: list[FileInfo] | None = None) -> str | None:
     """Build structured hints for natural-language PDF operations."""
+    explicit_hints = _extract_explicit_hint_block(message)
+    if explicit_hints:
+        return explicit_hints
+
     text = " ".join((message or "").strip().split())
     if not text:
         return None
@@ -71,6 +76,19 @@ def build_intent_hints(message: str, selected_inputs: list[FileInfo] | None = No
 
     deduped = list(dict.fromkeys(hints))
     return "\n".join(deduped) if deduped else None
+
+
+def _extract_explicit_hint_block(message: str) -> str | None:
+    if not message:
+        return None
+    match = _EXPLICIT_HINTS_RE.search(message)
+    if not match:
+        return None
+    body = match.group("body")
+    lines = [line.strip() for line in body.splitlines() if line.strip().startswith("- ")]
+    if not lines:
+        return None
+    return "\n".join(lines)
 
 
 def _infer_total_pages(selected_inputs: list[FileInfo]) -> int | None:

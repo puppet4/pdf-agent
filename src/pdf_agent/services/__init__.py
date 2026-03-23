@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import io
 import logging
+import mimetypes
 import shutil
 import tempfile
 import uuid
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pikepdf
@@ -117,6 +119,73 @@ def _generate_thumbnail(pdf_path: Path, thumb_path: Path, size: int = 200) -> bo
         return False
 
 
+def _guess_mime_type(path: Path) -> str:
+    guessed, _ = mimetypes.guess_type(path.name)
+    return guessed or "application/octet-stream"
+
+
+def _load_page_count(path: Path, mime_type: str) -> int | None:
+    if mime_type != "application/pdf":
+        return None
+    try:
+        with pikepdf.open(path) as pdf:
+            return len(pdf.pages)
+    except Exception:
+        logger.warning("Failed to inspect PDF page count for %s", path, exc_info=True)
+        return None
+
+
+def _find_storage_file(file_id: uuid.UUID) -> Path | None:
+    upload_dir = settings.upload_dir / str(file_id)
+    if not upload_dir.exists():
+        return None
+    candidates = sorted(
+        path for path in upload_dir.iterdir()
+        if path.is_file() and path.name.lower() != "thumbnail.jpg"
+    )
+    return candidates[0] if candidates else None
+
+
+def _build_storage_record(file_id: uuid.UUID, path: Path) -> FileRecord:
+    mime_type = _guess_mime_type(path)
+    stat = path.stat()
+    return FileRecord(
+        id=file_id,
+        orig_name=path.name,
+        mime_type=mime_type,
+        size_bytes=stat.st_size,
+        sha256=None,
+        page_count=_load_page_count(path, mime_type),
+        storage_path=str(path),
+        created_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+    )
+
+
+def load_storage_record(file_id: uuid.UUID) -> FileRecord | None:
+    path = _find_storage_file(file_id)
+    if path is None:
+        return None
+    return _build_storage_record(file_id, path)
+
+
+def list_storage_records() -> list[FileRecord]:
+    records: list[FileRecord] = []
+    if not settings.upload_dir.exists():
+        return records
+    for entry in settings.upload_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            file_id = uuid.UUID(entry.name)
+        except ValueError:
+            continue
+        record = load_storage_record(file_id)
+        if record is not None:
+            records.append(record)
+    records.sort(key=lambda item: item.created_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return records
+
+
 class FileService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -167,6 +236,10 @@ class FileService:
                             ErrorCode.PAGE_COUNT_EXCEEDED,
                             f"PDF exceeds {settings.max_page_count} page limit",
                         )
+            except pikepdf.PasswordError:
+                # Encrypted PDFs are valid inputs for flows like decrypt.
+                logger.info("Uploaded PDF %s is encrypted; accepting it without page count", filename)
+                page_count = None
             except PDFAgentError:
                 raise
             except Exception as exc:
@@ -191,16 +264,42 @@ class FileService:
             sha256=sha256,
             page_count=page_count,
             storage_path=str(path),
+            created_at=datetime.now(timezone.utc),
         )
         self.session.add(record)
-        await self.session.commit()
-        await self.session.refresh(record)
+        try:
+            await self.session.commit()
+            await self.session.refresh(record)
+        except Exception:
+            try:
+                await self.session.rollback()
+            except Exception:
+                logger.warning("Rollback failed after upload DB write error", exc_info=True)
+            logger.warning(
+                "Database write failed for upload %s; continuing with filesystem-backed record",
+                file_id,
+                exc_info=True,
+            )
         return record
 
+    async def list_records(self) -> list[FileRecord]:
+        try:
+            result = await self.session.execute(select(FileRecord).order_by(FileRecord.created_at.desc()))
+            return list(result.scalars().all())
+        except Exception:
+            logger.warning("Database read failed while listing uploads; falling back to filesystem index", exc_info=True)
+            return list_storage_records()
+
     async def get(self, file_id: uuid.UUID) -> FileRecord:
-        result = await self.session.execute(select(FileRecord).where(FileRecord.id == file_id))
-        record = result.scalar_one_or_none()
-        if not record:
+        try:
+            result = await self.session.execute(select(FileRecord).where(FileRecord.id == file_id))
+            record = result.scalar_one_or_none()
+        except Exception:
+            logger.warning("Database read failed for file %s; falling back to filesystem lookup", file_id, exc_info=True)
+            record = None
+        if record is None:
+            record = load_storage_record(file_id)
+        if record is None:
             raise PDFAgentError(ErrorCode.FILE_NOT_FOUND, f"File {file_id} not found")
         return record
 

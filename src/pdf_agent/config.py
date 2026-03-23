@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o"
     agent_temperature: float = 0
     agent_max_iterations: int = 20
+    disable_agent_persistence: bool = False
 
     # --- Storage ---
     data_dir: Path = Path("data")

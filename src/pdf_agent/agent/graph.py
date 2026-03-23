@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import tiktoken
-from langchain_core.messages import AIMessage, SystemMessage, ToolMessage, trim_messages
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, trim_messages
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, StateGraph

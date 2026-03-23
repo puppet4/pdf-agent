@@ -21,7 +21,7 @@ from pdf_agent.db import get_session
 from pdf_agent.db.models import FileRecord
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.file import FileUploadResponse
-from pdf_agent.services import FileService
+from pdf_agent.services import FileService, load_storage_record
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 logger = logging.getLogger(__name__)
@@ -96,10 +96,7 @@ async def list_files(
 
 async def _list_files_impl(page: int, limit: int, session: AsyncSession) -> dict:
     """List all uploaded files."""
-    result = await session.execute(
-        select(FileRecord).order_by(FileRecord.created_at.desc())
-    )
-    records = result.scalars().all()
+    records = await FileService(session).list_records()
     page = max(1, int(page))
     limit = max(1, min(int(limit), 200))
     total = len(records)
@@ -164,18 +161,30 @@ async def delete_file(
     session: AsyncSession = Depends(get_session),
 ):
     """Delete an uploaded file from DB and disk."""
-    result = await session.execute(select(FileRecord).where(FileRecord.id == file_id))
-    record = result.scalar_one_or_none()
-    if not record:
-        raise HTTPException(status_code=404, detail="File not found")
+    svc = FileService(session)
+    try:
+        record = await svc.get(file_id)
+    except PDFAgentError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     file_dir = Path(record.storage_path).parent
-    await session.delete(record)
-    await session.commit()
+    persisted = False
+    try:
+        result = await session.execute(select(FileRecord).where(FileRecord.id == file_id))
+        persisted_record = result.scalar_one_or_none()
+        if persisted_record is not None:
+            await session.delete(persisted_record)
+            await session.commit()
+            persisted = True
+    except Exception:
+        await session.rollback()
+        logger.warning("Failed to delete DB record for %s; removing storage only", file_id, exc_info=True)
     if file_dir.exists():
         try:
             shutil.rmtree(file_dir, ignore_errors=False)
         except OSError:
             logger.warning("Failed to remove upload directory for %s", file_id, exc_info=True)
+    if not persisted and load_storage_record(file_id) is not None:
+        raise HTTPException(status_code=500, detail="Failed to remove file storage")
     return {"deleted": True, "id": str(file_id)}
 
 
