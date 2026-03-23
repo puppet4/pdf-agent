@@ -204,28 +204,32 @@ async def lifespan(app: FastAPI):
         pool: AsyncConnectionPool | None = None
         checkpointer = None
 
-        try:
-            pool = AsyncConnectionPool(
-                conninfo=_sync_database_url(settings.database_url),
-                max_size=20,
-                open=False,
-            )
-            await pool.open()
-
-            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-            checkpointer = AsyncPostgresSaver(pool)
+        if settings.disable_agent_persistence:
+            logger.info("Agent persistence disabled by configuration")
+        else:
             try:
-                await checkpointer.setup()
+                pool = AsyncConnectionPool(
+                    conninfo=_sync_database_url(settings.database_url),
+                    max_size=20,
+                    open=False,
+                )
+                await pool.open()
+
+                from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+                checkpointer = AsyncPostgresSaver(pool)
+                try:
+                    await checkpointer.setup()
+                except Exception as exc:
+                    logger.warning("Checkpointer setup failed; disabling persistence: %s", exc)
+                    checkpointer = None
+                    await pool.close()
+                    pool = None
             except Exception as exc:
-                # setup() may fail if called inside a transaction (e.g. CREATE INDEX CONCURRENTLY).
-                # This is safe to ignore on subsequent startups — tables already exist.
-                logger.warning("Checkpointer setup warning (usually safe to ignore): %s", exc)
-        except Exception as exc:
-            logger.warning("Checkpointer unavailable; agent memory persistence disabled: %s", exc)
-            if pool is not None:
-                await pool.close()
-                pool = None
-            checkpointer = None
+                logger.warning("Checkpointer unavailable; agent memory persistence disabled: %s", exc)
+                if pool is not None:
+                    await pool.close()
+                    pool = None
+                checkpointer = None
 
         try:
             from pdf_agent.agent.graph import build_graph

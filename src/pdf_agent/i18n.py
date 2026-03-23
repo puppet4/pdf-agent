@@ -24,6 +24,7 @@ You have access to a set of PDF tools (merge, split, rotate, watermark, compress
 - For page_range parameters, use "all" to target every page, or expressions like "1-3,5", "odd", "even".
 - If the user wants a PDF split into multiple custom output files, use the split tool with `mode=range` and `page_groups` separated by `|`, for example `1|2-3`.
 - If a user message contains a `[Normalized intent hints]` block, treat it as trusted product-layer normalization for tool selection and parameters.
+- If the hints include `preferred_tool`, treat that tool choice as authoritative unless it is impossible to satisfy the request with that tool.
 - Keep responses concise and helpful.
     """,
     "zh": """\
@@ -46,6 +47,7 @@ You have access to a set of PDF tools (merge, split, rotate, watermark, compress
 - page_range 参数使用 "all" 表示所有页面，或 "1-3,5"、"odd"、"even" 等表达式。
 - 如果用户要求按多个自定义页组拆成多个文件，使用 split 工具的 `mode=range`，并把多个页组写到 `page_groups`，用 `|` 分隔，例如 `1|2-3`。
 - 如果用户消息里带有 `[Normalized intent hints]` 区块，把它当作产品层给出的可信归一化提示，用来帮助选择工具和参数。
+- 如果这些提示里包含 `preferred_tool`，除非该工具客观上无法完成请求，否则应把它视为权威工具选择，不要擅自改用别的工具。
 - 如果用户想“更换/替换/重做”水印，而当前选中的文件已经是加过水印的结果文件，不要继续叠加新水印；要明确说明现有导出水印无法自动移除，并要求用户改为选择未加水印的干净源文件。
 - 回复简洁有用。
 """,

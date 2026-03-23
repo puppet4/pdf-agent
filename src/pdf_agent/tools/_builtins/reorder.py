@@ -33,13 +33,20 @@ class ReorderTool(BaseTool):
         )
 
     def validate(self, params: dict) -> dict:
-        order_str = params.get("order", "")
-        if not order_str:
+        raw_order = params.get("order", "")
+        if raw_order in ("", None):
             raise ToolError(ErrorCode.INVALID_PARAMS, "order is required")
+
         try:
-            order = [int(x.strip()) for x in order_str.split(",")]
-        except ValueError:
-            raise ToolError(ErrorCode.INVALID_PARAMS, f"Invalid order format: {order_str}")
+            if isinstance(raw_order, str):
+                order = [int(x.strip()) for x in raw_order.split(",") if x.strip()]
+            elif isinstance(raw_order, (list, tuple)):
+                order = [int(x) for x in raw_order]
+            else:
+                raise TypeError
+        except (TypeError, ValueError):
+            raise ToolError(ErrorCode.INVALID_PARAMS, f"Invalid order format: {raw_order}")
+
         if not order:
             raise ToolError(ErrorCode.INVALID_PARAMS, "order cannot be empty")
         return {"order": order}
