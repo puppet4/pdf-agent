@@ -24,6 +24,7 @@ const PROMPT_PRESETS = [
 ];
 
 const FILE_ONLY_PROMPT = "请先查看我这次选中的文件，并准备按我的下一步要求处理。";
+const SURFACE_ERROR_TIMEOUT_MS = 5000;
 
 function App() {
   const [files, setFiles] = useState([]);
@@ -115,6 +116,14 @@ function App() {
   }, [copiedMessageId]);
 
   useEffect(() => {
+    if (!surfaceError) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setSurfaceError(""), SURFACE_ERROR_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [surfaceError]);
+
+  useEffect(() => {
     if (!previewFile) {
       return undefined;
     }
@@ -157,6 +166,14 @@ function App() {
       setSelectedFileIds([]);
       setSurfaceError("");
     } catch (e) {
+      if (e?.message === "Conversation not found") {
+        setConversations((current) => current.filter((item) => item.id !== conversationId));
+        if (currentConversationId === conversationId) {
+          setCurrentConversationId("");
+          setMessages([]);
+          setArtifacts([]);
+        }
+      }
       setSurfaceError(e.message);
     }
   };
@@ -547,7 +564,6 @@ function App() {
         }
 	      setIsThinking(false);
 	      setSurfaceError(error.message);
-	      setTimeout(() => setSurfaceError(""), 5000);
 	    } finally {
       if (abortControllerRef.current === abortController) {
         abortControllerRef.current = null;

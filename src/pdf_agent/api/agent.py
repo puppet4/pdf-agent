@@ -12,9 +12,11 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, BadRequestError, RateLimitError
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -177,6 +179,23 @@ def _build_message_input_state(
 def _sse_event(event: str, data: dict) -> str:
     """Format a Server-Sent Event."""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _format_agent_stream_error(exc: Exception) -> str:
+    if isinstance(exc, (APIConnectionError, APITimeoutError, httpx.ConnectError, httpx.TimeoutException)):
+        return (
+            "无法连接模型服务。请检查 OpenAI 配置，以及当前进程的 "
+            "HTTP_PROXY、HTTPS_PROXY、OPENAI_BASE_URL 是否正确。"
+        )
+    if isinstance(exc, AuthenticationError):
+        return "模型服务鉴权失败。请检查 OPENAI_API_KEY 是否正确。"
+    if isinstance(exc, RateLimitError):
+        return "模型服务限流。请稍后重试，或检查当前账号/模型配额。"
+    if isinstance(exc, BadRequestError):
+        return f"模型请求无效：{exc}"
+    if isinstance(exc, APIStatusError):
+        return f"模型服务请求失败（HTTP {exc.status_code}）。"
+    return str(exc) if str(exc).strip() else "处理失败，请查看后端日志。"
 
 
 def _sanitize_tool_args(args: dict) -> dict:
@@ -581,7 +600,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
 
         except Exception as e:
             logger.exception("Agent stream error")
-            yield _sse_event("error", {"message": str(e)})
+            yield _sse_event("error", {"message": _format_agent_stream_error(e)})
         finally:
             release_progress_queue(conversation_id)
 
