@@ -1,5 +1,18 @@
 import { API_BASE_URL, getApiKey } from './config';
 
+const BACKEND_UNAVAILABLE_MESSAGE = "无法连接后端服务（http://127.0.0.1:8000）。请确认 API 已启动。";
+
+const normalizeApiErrorMessage = (message, status) => {
+  const raw = typeof message === "string" ? message.trim() : "";
+  if (/ECONNREFUSED|proxy error|Failed to fetch|NetworkError|Load failed/i.test(raw)) {
+    return BACKEND_UNAVAILABLE_MESSAGE;
+  }
+  if (raw) {
+    return raw;
+  }
+  return status ? `HTTP ${status}` : "请求失败";
+};
+
 const withApiKey = (headers) => {
   const next = new Headers(headers || {});
   const apiKey = getApiKey();
@@ -15,14 +28,27 @@ export const api = async (path, options = {}) => {
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers,
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    throw new Error(normalizeApiErrorMessage(error?.message));
+  }
 
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || payload.message || `HTTP ${response.status}`);
+    const text = await response.text().catch(() => "");
+    let payload = {};
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = {};
+    }
+    throw new Error(
+      normalizeApiErrorMessage(payload.detail || payload.message || text, response.status)
+    );
   }
 
   if (response.status === 204) {
@@ -76,12 +102,16 @@ export const ConversationService = {
   },
   sendMessage: async (conversationId, payload, options = {}) => {
     const headers = withApiKey({ "Content-Type": "application/json" });
-    return fetch(`${API_BASE_URL}/api/conversations/${conversationId}/messages`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-      signal: options.signal,
-    });
+    try {
+      return await fetch(`${API_BASE_URL}/api/conversations/${conversationId}/messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: options.signal,
+      });
+    } catch (error) {
+      throw new Error(normalizeApiErrorMessage(error?.message));
+    }
   },
 };
 

@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     langsmith_project: str = "pdf-agent"
 
     # --- Rate Limiting ---
-    rate_limit_rpm: int = 20  # max chat requests per minute per IP, 0 = disabled
+    rate_limit_rpm: int = 200  # max chat requests per minute per IP, 0 = disabled
 
     # --- Cleanup ---
     conversation_ttl_hours: int = 72  # delete expired conversation workdirs older than this

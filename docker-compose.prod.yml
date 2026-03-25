@@ -26,7 +26,7 @@ services:
       # CORS — restrict to your domain(s)
       PDF_AGENT_CORS_ORIGINS: ${PDF_AGENT_CORS_ORIGINS:-https://yourdomain.com}
       # Rate limiting
-      PDF_AGENT_RATE_LIMIT_RPM: ${PDF_AGENT_RATE_LIMIT_RPM:-20}
+      PDF_AGENT_RATE_LIMIT_RPM: ${PDF_AGENT_RATE_LIMIT_RPM:-200}
       # Observability
       PDF_AGENT_SENTRY_DSN: ${PDF_AGENT_SENTRY_DSN:-}
       PDF_AGENT_LANGSMITH_API_KEY: ${PDF_AGENT_LANGSMITH_API_KEY:-}
