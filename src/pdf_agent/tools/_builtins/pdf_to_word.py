@@ -41,8 +41,8 @@ class PdfToWordTool(BaseTool):
         output_path = workdir / localized_output_name(inputs[0], "转Word", ext=".docx")
         lo_bin = shutil.which("libreoffice") or shutil.which("soffice")
         engine = "python-docx"
-        fallback_used = False
-        fallback_reason: str | None = None
+        fallback_used = not bool(lo_bin)
+        fallback_reason: str | None = "libreoffice not found" if not lo_bin else None
         if lo_bin:
             if reporter:
                 reporter(10, "Starting LibreOffice conversion...")
