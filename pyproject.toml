@@ -33,6 +33,10 @@ dev = [
     "psycopg2-binary>=2.9.0",
     "python-docx>=1.1.0",
     "python-barcode[images]>=0.15.1",
+    "qrcode[pil]>=7.4.2",
+    "pdfminer.six>=20221105",
+    "openpyxl>=3.1.0",
+    "python-pptx>=1.0.0",
 ]
 tracing = [
     "langsmith>=0.2.0",
