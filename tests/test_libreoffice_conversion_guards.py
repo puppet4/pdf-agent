@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from pdf_agent.core import ToolError
 from pdf_agent.tools._builtins.office_to_pdf import OfficeToPdfTool
 from pdf_agent.tools._builtins.pdf_to_office import PdfToExcelTool, PdfToPptTool
 from pdf_agent.tools._builtins.pdf_to_word import PdfToWordTool

@@ -1,7 +1,6 @@
 """LangGraph StateGraph construction — agent + custom tool node."""
 from __future__ import annotations
 
-import json
 import logging
 import mimetypes
 import uuid
@@ -9,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import tiktoken
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, trim_messages
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage, trim_messages
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, StateGraph
