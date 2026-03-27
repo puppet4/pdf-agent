@@ -448,7 +448,6 @@ function App() {
     }]);
     setEditingMessageId("");
     setEditingOriginalText("");
-    setSelectedArtifactPaths([]);
 
     streamingAssistantIdRef.current = null;
     pendingArtifactUrlsRef.current = [];
@@ -873,13 +872,28 @@ function App() {
               <div className="attached-files-row">
                 {selectedFiles.map(f => (
                   <div key={f.id} className="attached-file-chip">
-                    <span className="file-name-chip">{truncateText(f.orig_name, 20)}</span>
+                    <span
+                      className="file-name-chip"
+                      data-tooltip={f.orig_name}
+                      title={f.orig_name}
+                    >
+                      <span className="file-name-text">{truncateText(f.orig_name, 20)}</span>
+                    </span>
                     <button className="remove-file-btn" onClick={() => toggleFileSelection(f.id)}><CloseIcon /></button>
                   </div>
                 ))}
                 {selectedArtifacts.map((artifact) => (
-                  <div key={artifact.path} className="attached-file-chip artifact-chip">
-                    <span className="file-name-chip">{truncateText(artifact.filename || artifact.path, 20)}</span>
+                  <div
+                    key={artifact.path}
+                    className="attached-file-chip artifact-chip"
+                  >
+                    <span
+                      className="file-name-chip"
+                      data-tooltip={artifact.filename || artifact.path}
+                      title={artifact.filename || artifact.path}
+                    >
+                      <span className="file-name-text">{truncateText(artifact.filename || artifact.path, 20)}</span>
+                    </span>
                     <button className="remove-file-btn" onClick={() => toggleArtifactSelection(artifact.path)}><CloseIcon /></button>
                   </div>
                 ))}
@@ -939,7 +953,7 @@ function App() {
               )}
             </div>
               <div className="input-hint">
-                已上传并选中的原始文件会保留在当前会话中，直到手动移除。处理结果如需继续使用，请在“结果文件”里点“用作输入”。
+                已选中的原始文件和结果文件都会保留在当前会话中，直到手动移除。处理结果如需继续使用，请在“结果文件”里点“用作输入”。
               </div>
               {editingMessageId && (
                 <div className="edit-banner">

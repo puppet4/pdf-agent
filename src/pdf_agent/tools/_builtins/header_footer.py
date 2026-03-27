@@ -5,6 +5,8 @@ import io
 from pathlib import Path
 
 import pikepdf
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas
 
 from pdf_agent.core import ErrorCode, ToolError
@@ -12,6 +14,14 @@ from pdf_agent.core.page_range import parse_page_range
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools.filenames import localized_output_name
+
+pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+
+
+def _font_name_for_text(*values: str) -> str:
+    combined = "".join(value for value in values if value)
+    has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in combined)
+    return "STSong-Light" if has_cjk else "Helvetica"
 
 
 class HeaderFooterTool(BaseTool):
@@ -64,15 +74,15 @@ class HeaderFooterTool(BaseTool):
 
                 buf = io.BytesIO()
                 c = canvas.Canvas(buf, pagesize=(pw, ph))
-                c.setFont("Helvetica", params["font_size"])
+                header_text = params["header"].replace("{page}", str(idx + 1)).replace("{total}", str(total)) if params["header"] else ""
+                footer_text = params["footer"].replace("{page}", str(idx + 1)).replace("{total}", str(total)) if params["footer"] else ""
+                c.setFont(_font_name_for_text(header_text, footer_text), params["font_size"])
 
-                if params["header"]:
-                    text = params["header"].replace("{page}", str(idx + 1)).replace("{total}", str(total))
-                    c.drawCentredString(pw / 2, ph - params["margin"], text)
+                if header_text:
+                    c.drawCentredString(pw / 2, ph - params["margin"], header_text)
 
-                if params["footer"]:
-                    text = params["footer"].replace("{page}", str(idx + 1)).replace("{total}", str(total))
-                    c.drawCentredString(pw / 2, params["margin"] - params["font_size"], text)
+                if footer_text:
+                    c.drawCentredString(pw / 2, params["margin"] - params["font_size"], footer_text)
 
                 c.save()
                 buf.seek(0)

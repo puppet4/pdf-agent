@@ -898,6 +898,54 @@ a {
   border-radius: var(--radius-sm);
   font-size: 13px;
   font-weight: 500;
+  min-width: 0;
+}
+
+.file-name-chip {
+  position: relative;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+.file-name-text {
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-name-chip:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%);
+  z-index: 30;
+  min-width: max-content;
+  max-width: min(360px, 70vw);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.96);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: normal;
+  word-break: break-word;
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.22);
+}
+
+.file-name-chip:hover::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 4px);
+  transform: translateX(-50%);
+  z-index: 29;
+  border-width: 6px;
+  border-style: solid;
+  border-color: rgba(15, 23, 42, 0.96) transparent transparent transparent;
 }
 
 .attached-file-chip.artifact-chip {

@@ -137,6 +137,34 @@ def _resolve_selected_artifacts(conversation_id: str, artifact_paths: list[str])
     return files
 
 
+def _artifact_step_sort_key(artifact_path: str) -> tuple[int, str]:
+    parts = Path(artifact_path).parts
+    if parts and parts[0].startswith("step_"):
+        try:
+            return int(parts[0].split("_", 1)[1]), artifact_path
+        except ValueError:
+            pass
+    return -1, artifact_path
+
+
+def _resolve_message_named_artifact_paths(conversation_dir: Path, message: str) -> list[str]:
+    if not message.strip() or not conversation_dir.exists():
+        return []
+
+    artifacts = _list_artifacts(conversation_dir, conversation_id="")
+    resolved: list[str] = []
+    seen_filenames: set[str] = set()
+    for artifact in sorted(artifacts, key=lambda item: _artifact_step_sort_key(item["path"]), reverse=True):
+        filename = str(artifact.get("filename", "") or "")
+        artifact_path = str(artifact.get("path", "") or "")
+        if not filename or not artifact_path or filename in seen_filenames:
+            continue
+        if filename in message:
+            resolved.append(artifact_path)
+            seen_filenames.add(filename)
+    return resolved
+
+
 def _serialize_selected_input(file_info: FileInfo, conversation_id: str) -> dict[str, str]:
     path = str(file_info["path"])
     item = {
@@ -329,8 +357,19 @@ def _count_artifacts(conversation_dir: Path) -> int:
                 continue
         except OSError:
             continue
-        total += sum(1 for candidate in step_dir.rglob("*") if candidate.is_file())
+        total += sum(1 for candidate in step_dir.rglob("*") if _is_user_visible_artifact(candidate, step_dir))
     return total
+
+
+def _is_user_visible_artifact(candidate: Path, step_dir: Path) -> bool:
+    try:
+        if not candidate.is_file():
+            return False
+        rel = candidate.relative_to(step_dir)
+    except OSError:
+        return False
+
+    return all(part and not part.startswith(".") for part in rel.parts)
 
 
 async def _load_conversation_messages(conversation_id: str, request: Request) -> list[dict]:
@@ -408,7 +447,7 @@ def _list_artifacts(conversation_dir: Path, conversation_id: str) -> list[dict]:
             continue
         for artifact in step_dir.rglob("*"):
             try:
-                if not artifact.is_file():
+                if not _is_user_visible_artifact(artifact, step_dir):
                     continue
                 rel = artifact.relative_to(conversation_dir).as_posix()
                 artifacts.append(
@@ -540,11 +579,13 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
 
     # Resolve uploaded files
     uploaded_files = await _resolve_uploaded_files(req.file_ids)
-    selected_artifacts = _resolve_selected_artifacts(conversation_id, req.artifact_paths)
-    selected_inputs = uploaded_files + selected_artifacts
     # Create conversation workdir only after request validation succeeds
     conversation_workdir = _resolve_conversation_dir(conversation_id)
     conversation_workdir.mkdir(parents=True, exist_ok=True)
+    message_named_artifact_paths = _resolve_message_named_artifact_paths(conversation_workdir, req.message)
+    effective_artifact_paths = message_named_artifact_paths or req.artifact_paths
+    selected_artifacts = _resolve_selected_artifacts(conversation_id, effective_artifact_paths)
+    selected_inputs = (selected_artifacts + uploaded_files) if message_named_artifact_paths else (uploaded_files + selected_artifacts)
     current_title = _read_conversation_title(conversation_workdir)
     if current_title == _DEFAULT_CONVERSATION_TITLE:
         _write_conversation_title(conversation_workdir, req.message)
