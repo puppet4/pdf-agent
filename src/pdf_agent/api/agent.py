@@ -1,13 +1,10 @@
 """Conversation API — chat streaming and artifact access."""
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import queue
 import re
 import shutil
-import time
 import uuid
 from pathlib import Path
 from urllib.parse import quote
@@ -18,14 +15,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, BadRequestError, RateLimitError
 from pydantic import BaseModel
-from sqlalchemy import select
 
 from pdf_agent.agent.intent_hints import build_intent_hints
 from pdf_agent.agent.state import FileInfo
 from pdf_agent.agent.tools_adapter import parse_tool_result_payload
 from pdf_agent.config import settings
 from pdf_agent.db import async_session_factory
-from pdf_agent.db.models import FileRecord
 from pdf_agent.services import FileService
 
 logger = logging.getLogger(__name__)
@@ -617,7 +612,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
 
         # Import progress queue helpers
         from pdf_agent.agent.tools_adapter import get_progress_queue, release_progress_queue
-        prog_queue = get_progress_queue(conversation_id)
+        get_progress_queue(conversation_id)
 
         try:
             async for event in graph.astream_events(input_state, config=config, version="v2"):
