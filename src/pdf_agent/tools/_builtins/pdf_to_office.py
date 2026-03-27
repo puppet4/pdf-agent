@@ -35,8 +35,8 @@ class PdfToExcelTool(BaseTool):
         output_path = workdir / localized_output_name(inputs[0], "转Excel", ext=".xlsx")
         lo_bin = shutil.which("libreoffice") or shutil.which("soffice")
         engine = "openpyxl"
-        fallback_used = False
-        fallback_reason: str | None = None
+        fallback_used = not bool(lo_bin)
+        fallback_reason: str | None = "libreoffice not found" if not lo_bin else None
         if lo_bin:
             if reporter:
                 reporter(10, "Starting conversion...")
@@ -106,8 +106,8 @@ class PdfToPptTool(BaseTool):
         output_path = workdir / localized_output_name(inputs[0], "转PPT", ext=".pptx")
         lo_bin = shutil.which("libreoffice") or shutil.which("soffice")
         engine = "python-pptx"
-        fallback_used = False
-        fallback_reason: str | None = None
+        fallback_used = not bool(lo_bin)
+        fallback_reason: str | None = "libreoffice not found" if not lo_bin else None
         if lo_bin:
             if reporter:
                 reporter(10, "Starting conversion...")
