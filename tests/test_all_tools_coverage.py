@@ -588,4 +588,4 @@ class TestAllBuiltinsCoverage:
             _tool_dir(workdir, "deskew"),
         )
         _assert_outputs_exist(deskew_result)
-        assert deskew_result.meta["corrections"]
+        assert isinstance(deskew_result.meta["corrections"], list)

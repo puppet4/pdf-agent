@@ -14,6 +14,15 @@ from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools.filenames import localized_output_name
 
 
+OSD_RENDER_DPI = 200
+DEFAULT_MIN_CONFIDENCE = 10
+
+
+def _is_low_text_osd_error(exc: ToolError) -> bool:
+    detail = (exc.message or "").lower()
+    return exc.code == ErrorCode.ENGINE_EXEC_FAILED and "too few characters" in detail
+
+
 def _detect_rotation(image_path: Path) -> tuple[int, float | None]:
     """Use tesseract OSD to detect required rotation (degrees, confidence)."""
     tesseract = shutil.which("tesseract")
@@ -50,7 +59,7 @@ def _render_page_png(pdf_path: Path, page_idx: int, tmpdir: Path) -> Path | None
         return None
     out_stem = tmpdir / f"p{page_idx}"
     result = run_command(
-        [pdftoppm, "-r", "72", "-png", "-f", str(page_idx + 1), "-l", str(page_idx + 1),
+        [pdftoppm, "-r", str(OSD_RENDER_DPI), "-png", "-f", str(page_idx + 1), "-l", str(page_idx + 1),
          str(pdf_path), str(out_stem)],
         check=False,
         timeout=30,
@@ -76,10 +85,10 @@ class AutoRotateTool(BaseTool):
                     name="min_confidence",
                     label="最低置信度",
                     type="int",
-                    default=2,
+                    default=DEFAULT_MIN_CONFIDENCE,
                     min=0,
                     max=10,
-                    description="低于此置信度的页面不旋转（0=全部旋转, 10=仅高置信度）",
+                    description="低于此置信度的页面不旋转。默认更保守，避免误转正常页面。",
                 ),
             ],
             engine="tesseract+pikepdf",
@@ -87,7 +96,7 @@ class AutoRotateTool(BaseTool):
         )
 
     def validate(self, params: dict) -> dict:
-        return {"min_confidence": max(0, min(10, int(params.get("min_confidence", 2))))}
+        return {"min_confidence": max(0, min(10, int(params.get("min_confidence", DEFAULT_MIN_CONFIDENCE))))}
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
         if not shutil.which("tesseract"):
@@ -104,14 +113,21 @@ class AutoRotateTool(BaseTool):
             tmpdir = Path(td)
             with pikepdf.open(inputs[0]) as pdf:
                 total = len(pdf.pages)
+                skipped_pages = []
                 for i in range(total):
                     if reporter:
                         reporter(int(i / total * 85), f"Analyzing page {i+1}/{total}")
                     img = _render_page_png(inputs[0], i, tmpdir)
                     if not img:
                         raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, f"Failed to render page {i + 1} for analysis")
-                    angle, confidence = _detect_rotation(img)
-                    if confidence is not None and confidence < params["min_confidence"]:
+                    try:
+                        angle, confidence = _detect_rotation(img)
+                    except ToolError as exc:
+                        if _is_low_text_osd_error(exc):
+                            skipped_pages.append(i + 1)
+                            continue
+                        raise
+                    if confidence is None or confidence < params["min_confidence"]:
                         continue
                     if angle != 0:
                         pdf.pages[i].rotate(angle, relative=True)
@@ -126,6 +142,6 @@ class AutoRotateTool(BaseTool):
         summary = f"Auto-rotated {len(rotations)} page(s)" if rotations else "No rotation needed"
         return ToolResult(
             output_files=[output_path],
-            meta={"rotations": rotations, "total_pages": total},
+            meta={"rotations": rotations, "total_pages": total, "skipped_pages": skipped_pages},
             log=summary,
         )

@@ -15,6 +15,16 @@ from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools.filenames import localized_output_name
 
 
+def _normalize_skew_angle(raw_angle: float | None) -> float | None:
+    """Keep only small skew corrections; discard orientation-like 90/180/270 signals."""
+    if raw_angle is None:
+        return None
+    normalized = ((float(raw_angle) + 180.0) % 360.0) - 180.0
+    if abs(normalized) > 45.0:
+        return None
+    return normalized
+
+
 def _detect_skew(image_path: Path) -> float | None:
     """Use tesseract OSD to detect page skew angle (degrees)."""
     tesseract = shutil.which("tesseract")
@@ -120,7 +130,7 @@ class DeskewTool(BaseTool):
                     if not img_path:
                         continue
 
-                    angle = _detect_skew(img_path)
+                    angle = _normalize_skew_angle(_detect_skew(img_path))
                     if angle is None or abs(angle) < params["min_angle"]:
                         continue
 
