@@ -31,6 +31,8 @@ dev = [
     "httpx>=0.28.0",
     "ruff>=0.8.0",
     "psycopg2-binary>=2.9.0",
+    "python-docx>=1.1.0",
+    "python-barcode[images]>=0.15.1",
 ]
 tracing = [
     "langsmith>=0.2.0",
