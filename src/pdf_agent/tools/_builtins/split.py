@@ -19,9 +19,9 @@ class SplitTool(BaseTool):
             name="split",
             label="拆分 PDF",
             category="page_ops",
-            description="按页范围、每页一个或固定页数拆分 PDF",
+            description="按页范围、每页一个、固定页数或书签拆分 PDF",
             inputs=ToolInputSpec(min=1, max=1),
-            outputs=ToolOutputSpec(type="zip"),
+            outputs=ToolOutputSpec(type="pdf"),
             params=[
                 ParamSpec(
                     name="mode",

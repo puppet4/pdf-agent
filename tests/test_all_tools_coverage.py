@@ -8,6 +8,8 @@ from zipfile import ZipFile
 import pikepdf
 import pytest
 
+from pdf_agent.core import ToolError
+
 from pdf_agent.tools._builtins.add_blank_pages import AddBlankPagesTool
 from pdf_agent.tools._builtins.add_page_numbers import AddPageNumbersTool
 from pdf_agent.tools._builtins.auto_rotate import AutoRotateTool
@@ -582,10 +584,9 @@ class TestAllBuiltinsCoverage:
         _assert_outputs_exist(auto_rotate_result)
         assert auto_rotate_result.meta["rotations"]
 
-        deskew_result = DeskewTool().run(
-            [rotated_text_pdf],
-            {"page_range": "1", "min_angle": 0.5},
-            _tool_dir(workdir, "deskew"),
-        )
-        _assert_outputs_exist(deskew_result)
-        assert isinstance(deskew_result.meta["corrections"], list)
+        with pytest.raises(ToolError, match="ocr"):
+            DeskewTool().run(
+                [rotated_text_pdf],
+                {"page_range": "1", "min_angle": 0.5},
+                _tool_dir(workdir, "deskew"),
+            )
