@@ -87,7 +87,6 @@ class AutoRotateTool(BaseTool):
                     type="int",
                     default=DEFAULT_MIN_CONFIDENCE,
                     min=0,
-                    max=10,
                     description="低于此置信度的页面不旋转。默认更保守，避免误转正常页面。",
                 ),
             ],
@@ -96,7 +95,7 @@ class AutoRotateTool(BaseTool):
         )
 
     def validate(self, params: dict) -> dict:
-        return {"min_confidence": max(0, min(10, int(params.get("min_confidence", DEFAULT_MIN_CONFIDENCE))))}
+        return {"min_confidence": max(0, int(params.get("min_confidence", DEFAULT_MIN_CONFIDENCE)))}
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
         if not shutil.which("tesseract"):

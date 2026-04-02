@@ -46,7 +46,7 @@ def parse_page_range(expr: str, total_pages: int) -> list[int]:
             pages.append(pg - 1)
         else:
             raise PDFAgentError(ErrorCode.INVALID_PAGE_RANGE, f"Invalid page range token: '{part}'")
-    return pages
+    return list(dict.fromkeys(pages))
 
 
 def _resolve_last(expr: str, total_pages: int) -> str:

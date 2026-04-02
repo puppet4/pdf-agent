@@ -6,6 +6,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import NullPool
 
+from pdf_agent.core.page_range import parse_page_range
+
 
 class TestCoreSurfaceSmoke:
     def test_app_exposes_core_routes(self):
@@ -94,3 +96,9 @@ class TestCoreSurfaceSmoke:
         from pdf_agent.db import engine
 
         assert isinstance(engine.pool, NullPool)
+
+    def test_parse_page_range_deduplicates_while_preserving_order(self):
+        assert parse_page_range("1,1", total_pages=5) == [0]
+        assert parse_page_range("1-2,2", total_pages=5) == [0, 1]
+        assert parse_page_range("last-2-last", total_pages=5) == [2, 3, 4]
+

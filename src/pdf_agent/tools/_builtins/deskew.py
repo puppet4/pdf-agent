@@ -1,69 +1,11 @@
-"""Auto-deskew tool — detect and correct skewed pages using Tesseract OSD."""
+"""Deskew tool is intentionally disabled; use OCR deskew instead."""
 from __future__ import annotations
 
-import shutil
-import tempfile
 from pathlib import Path
 
-import pikepdf
-
 from pdf_agent.core import ErrorCode, ToolError
-from pdf_agent.core.page_range import parse_page_range
-from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
-from pdf_agent.tools.filenames import localized_output_name
-
-
-def _normalize_skew_angle(raw_angle: float | None) -> float | None:
-    """Keep only small skew corrections; discard orientation-like 90/180/270 signals."""
-    if raw_angle is None:
-        return None
-    normalized = ((float(raw_angle) + 180.0) % 360.0) - 180.0
-    if abs(normalized) > 45.0:
-        return None
-    return normalized
-
-
-def _detect_skew(image_path: Path) -> float | None:
-    """Use tesseract OSD to detect page skew angle (degrees)."""
-    tesseract = shutil.which("tesseract")
-    if not tesseract:
-        return None
-    try:
-        result = run_command(
-            [tesseract, str(image_path), "stdout", "--psm", "0", "-l", "osd"],
-            check=False,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            return None
-        stdout = result.stdout.decode("utf-8", errors="replace")
-        for line in stdout.splitlines():
-            if "Rotate:" in line:
-                angle = float(line.split(":")[1].strip())
-                return angle
-    except Exception:
-        pass
-    return None
-
-
-def _render_page_to_image(pdf_path: Path, page_idx: int, tmpdir: Path, dpi: int = 150) -> Path | None:
-    """Render a single PDF page to PNG using pdftoppm."""
-    pdftoppm = shutil.which("pdftoppm")
-    if not pdftoppm:
-        return None
-    out_stem = tmpdir / f"page_{page_idx}"
-    result = run_command(
-        [pdftoppm, "-r", str(dpi), "-png", "-f", str(page_idx + 1), "-l", str(page_idx + 1),
-         str(pdf_path), str(out_stem)],
-        check=False,
-        timeout=30,
-    )
-    if result.returncode != 0:
-        return None
-    candidates = list(tmpdir.glob(f"page_{page_idx}*.png"))
-    return candidates[0] if candidates else None
 
 
 class DeskewTool(BaseTool):
@@ -72,7 +14,7 @@ class DeskewTool(BaseTool):
             name="deskew",
             label="自动纠偏",
             category="page_ops",
-            description="检测并自动校正 PDF 页面的倾斜方向（需要 Tesseract 和 poppler）",
+            description="当前独立纠偏工具已禁用；请改用 OCR 工具并设置 deskew=true",
             inputs=ToolInputSpec(min=1, max=1),
             outputs=ToolOutputSpec(type="pdf"),
             params=[
@@ -81,7 +23,7 @@ class DeskewTool(BaseTool):
                     label="页范围",
                     type="page_range",
                     default="all",
-                    description="要纠偏的页面范围",
+                    description="保留兼容的页范围参数；请改用 OCR 工具处理",
                 ),
                 ParamSpec(
                     name="min_angle",
@@ -90,10 +32,10 @@ class DeskewTool(BaseTool):
                     default=0.5,
                     min=0.1,
                     max=45.0,
-                    description="小于该角度的偏斜忽略不处理",
+                    description="保留兼容参数；当前独立纠偏工具已禁用",
                 ),
             ],
-            engine="tesseract+pikepdf",
+            engine="ocrmypdf",
             async_hint=True,
         )
 
@@ -104,50 +46,8 @@ class DeskewTool(BaseTool):
         }
 
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
-        if not shutil.which("tesseract"):
-            raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "Tesseract is not installed")
-        if not shutil.which("pdftoppm"):
-            raise ToolError(ErrorCode.ENGINE_NOT_INSTALLED, "pdftoppm (poppler-utils) is not installed")
-
-        params = self.validate(params)
-        output_path = workdir / localized_output_name(inputs[0], "已校正倾斜")
-        corrections: list[dict] = []
-
-        with tempfile.TemporaryDirectory() as td:
-            tmpdir = Path(td)
-
-            with pikepdf.open(inputs[0]) as pdf:
-                total = len(pdf.pages)
-                target_pages = set(parse_page_range(params["page_range"], total))
-
-                for i in range(total):
-                    if i not in target_pages:
-                        continue
-                    if reporter:
-                        reporter(int(i / total * 85), f"Analyzing page {i+1}/{total}")
-
-                    img_path = _render_page_to_image(inputs[0], i, tmpdir)
-                    if not img_path:
-                        continue
-
-                    angle = _normalize_skew_angle(_detect_skew(img_path))
-                    if angle is None or abs(angle) < params["min_angle"]:
-                        continue
-
-                    # Apply rotation to PDF page
-                    pdf.pages[i].rotate(int(round(angle)), relative=True)
-                    corrections.append({"page": i + 1, "angle": angle})
-
-                if reporter:
-                    reporter(95, "Saving...")
-                pdf.save(output_path)
-
-        if reporter:
-            reporter(100, "Done")
-
-        summary = f"Corrected {len(corrections)} page(s)" if corrections else "No significant skew detected"
-        return ToolResult(
-            output_files=[output_path],
-            meta={"corrections": corrections, "pages_checked": len(target_pages)},
-            log=f"{summary}. {corrections}",
+        self.validate(params)
+        raise ToolError(
+            ErrorCode.INVALID_PARAMS,
+            "The standalone deskew tool is disabled. Use the ocr tool with deskew=true instead.",
         )
