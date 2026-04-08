@@ -1,6 +1,7 @@
 """Local file storage management."""
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import hashlib
 import logging
 import shutil
@@ -11,6 +12,16 @@ from pathlib import Path
 from pdf_agent.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class StorageTrimResult:
+    removed_conversation_ids: list[str] = field(default_factory=list)
+    removed_upload_ids: list[str] = field(default_factory=list)
+
+    @property
+    def total_removed(self) -> int:
+        return len(self.removed_conversation_ids) + len(self.removed_upload_ids)
 
 
 class LocalStorage:
@@ -131,31 +142,49 @@ class LocalStorage:
     def storage_limit_bytes(self) -> int:
         return settings.max_storage_gb * 1024 * 1024 * 1024
 
-    def trim_storage_lru(self) -> int:
-        """Delete oldest upload/conversation dirs first until under the configured storage limit."""
+    def trim_storage_lru_details(
+        self,
+        *,
+        include_conversations: bool = True,
+        include_uploads: bool = True,
+    ) -> StorageTrimResult:
+        """Delete oldest storage dirs first until under the configured storage limit."""
         limit = self.storage_limit_bytes()
         current = self.dir_size_bytes()
         if current <= limit:
-            return 0
+            return StorageTrimResult()
 
-        removed = 0
-        candidates = []
-        for root in (settings.conversations_dir, settings.upload_dir):
+        result = StorageTrimResult()
+        candidates: list[tuple[float, str, Path]] = []
+        roots: list[tuple[str, Path]] = []
+        if include_conversations:
+            roots.append(("conversation", settings.conversations_dir))
+        if include_uploads:
+            roots.append(("upload", settings.upload_dir))
+
+        for kind, root in roots:
             if not root.exists():
                 continue
             for entry in root.iterdir():
                 if entry.is_dir():
                     try:
-                        candidates.append((entry.stat().st_mtime, entry))
+                        candidates.append((entry.stat().st_mtime, kind, entry))
                     except OSError:
                         continue
-        for _, entry in sorted(candidates, key=lambda item: item[0]):
+        for _, kind, entry in sorted(candidates, key=lambda item: item[0]):
             shutil.rmtree(entry, ignore_errors=True)
-            removed += 1
+            if kind == "conversation":
+                result.removed_conversation_ids.append(entry.name)
+            else:
+                result.removed_upload_ids.append(entry.name)
             current = self.dir_size_bytes()
             if current <= limit:
                 break
-        return removed
+        return result
+
+    def trim_storage_lru(self) -> int:
+        """Backward-compatible count-only wrapper for LRU trimming."""
+        return self.trim_storage_lru_details().total_removed
 
 
 storage = LocalStorage()

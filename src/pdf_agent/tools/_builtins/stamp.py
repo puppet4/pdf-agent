@@ -96,15 +96,15 @@ class StampTool(BaseTool):
 
         output_path = workdir / localized_output_name(pdf_path, "已盖章")
 
+        with Image.open(img_path) as opened_stamp:
+            stamp_img = opened_stamp.convert("RGBA")
+        r, g, b, a = stamp_img.split()
+        a = a.point(lambda x: int(x * params["opacity"]))
+        stamp_img = Image.merge("RGBA", (r, g, b, a))
+
         with pikepdf.open(pdf_path) as pdf:
             total = len(pdf.pages)
             pages = parse_page_range(params["page_range"], total)
-
-            # Load stamp image and apply opacity
-            stamp_img = Image.open(img_path).convert("RGBA")
-            r, g, b, a = stamp_img.split()
-            a = a.point(lambda x: int(x * params["opacity"]))
-            stamp_img = Image.merge("RGBA", (r, g, b, a))
 
             for idx in pages:
                 page = pdf.pages[idx]
@@ -141,18 +141,21 @@ class StampTool(BaseTool):
                 c.drawImage(
                     ImageReader(img_buf), x, y, width=sw, height=sh, mask="auto"
                 )
+                c.showPage()
                 c.save()
                 buf.seek(0)
 
                 # Merge overlay onto page
-                overlay_pdf = pikepdf.Pdf.open(buf)
-                overlay_page = overlay_pdf.pages[0]
-                pikepdf.Page(page).add_overlay(overlay_page)
+                with pikepdf.open(buf) as overlay_pdf:
+                    overlay_page = overlay_pdf.pages[0]
+                    pikepdf.Page(page).add_overlay(overlay_page)
 
             pdf.save(output_path)
+
+        stamp_img.close()
 
         return ToolResult(
             output_files=[output_path],
             meta={"stamped_pages": len(pages), "position": params["position"]},
             log=f"Added stamp to {len(pages)} page(s) at {params['position']}",
-        )
+    )

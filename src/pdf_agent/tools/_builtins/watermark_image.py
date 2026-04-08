@@ -87,7 +87,8 @@ class WatermarkImageTool(BaseTool):
         img_path = inputs[1]
 
         try:
-            wm_img = Image.open(img_path)
+            with Image.open(img_path) as opened_image:
+                wm_img = opened_image.copy()
         except Exception as exc:
             raise ToolError(ErrorCode.INVALID_INPUT_FILE, f"Cannot open watermark image: {exc}")
 
@@ -126,6 +127,8 @@ class WatermarkImageTool(BaseTool):
                     reporter(int((i + 1) / total * 100))
 
             pdf.save(output_path)
+
+        wm_img.close()
 
         return ToolResult(
             output_files=[output_path],

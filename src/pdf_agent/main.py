@@ -119,6 +119,16 @@ async def _cleanup_upload_records(upload_ids: list[str]) -> int:
         return len(records)
 
 
+async def _cleanup_trimmed_storage(app: FastAPI, removed_conversation_ids: list[str], removed_upload_ids: list[str]) -> tuple[int, int]:
+    """Synchronize DB/checkpoint state after LRU storage trimming."""
+    removed_uploads = await _cleanup_upload_records(removed_upload_ids)
+    removed_checkpoints = await _cleanup_conversation_checkpoints(
+        getattr(app.state, "checkpointer", None),
+        removed_conversation_ids,
+    )
+    return removed_uploads, removed_checkpoints
+
+
 async def _cleanup_loop(app: FastAPI):
     """Periodically clean up expired uploads, stale conversation state, and storage pressure."""
     from pdf_agent.storage import storage
@@ -131,13 +141,20 @@ async def _cleanup_loop(app: FastAPI):
             )
             removed_upload_ids = storage.cleanup_expired_uploads()
             removed_uploads = await _cleanup_upload_records(removed_upload_ids)
-            trimmed = storage.trim_storage_lru()
-            if removed_conversations or removed_uploads or trimmed:
+            trim_result = storage.trim_storage_lru_details()
+            trimmed_uploads, trimmed_checkpoints = await _cleanup_trimmed_storage(
+                app,
+                trim_result.removed_conversation_ids,
+                trim_result.removed_upload_ids,
+            )
+            if removed_conversations or removed_uploads or trim_result.total_removed:
                 logger.info(
-                    "Cleaned up %d conversation(s), %d upload(s), trimmed %d dir(s)",
+                    "Cleaned up %d expired conversation(s), %d expired upload(s), trimmed %d dir(s), synced %d upload record(s), %d checkpoint(s)",
                     removed_conversations,
                     removed_uploads,
-                    trimmed,
+                    trim_result.total_removed,
+                    trimmed_uploads,
+                    trimmed_checkpoints,
                 )
         except Exception:
             logger.exception("Cleanup failed")
@@ -190,9 +207,9 @@ async def lifespan(app: FastAPI):
     removed_uploads = await _cleanup_upload_records(removed_upload_ids)
     if removed_uploads:
         logger.info("Startup cleanup: removed %d expired upload(s)", removed_uploads)
-    trimmed = storage.trim_storage_lru()
-    if trimmed:
-        logger.info("Startup cleanup: trimmed %d old storage dir(s)", trimmed)
+    trim_result = storage.trim_storage_lru_details()
+    if trim_result.total_removed:
+        logger.info("Startup cleanup: trimmed %d old storage dir(s)", trim_result.total_removed)
 
     app.state.graph = None
     app.state.pool = None
@@ -253,10 +270,16 @@ async def lifespan(app: FastAPI):
         logger.info("OpenAI API key not configured; agent endpoints disabled")
 
     # Catch any expired conversations that may still have persisted checkpoint state.
-    if app.state.checkpointer is not None and expired_conversation_ids:
-        removed_checkpoints = await _cleanup_conversation_checkpoints(app.state.checkpointer, expired_conversation_ids)
+    trimmed_conversation_ids = trim_result.removed_conversation_ids if 'trim_result' in locals() else []
+    checkpoint_cleanup_ids = list(dict.fromkeys([*expired_conversation_ids, *trimmed_conversation_ids]))
+    if app.state.checkpointer is not None and checkpoint_cleanup_ids:
+        removed_checkpoints = await _cleanup_conversation_checkpoints(app.state.checkpointer, checkpoint_cleanup_ids)
         if removed_checkpoints:
             logger.info("Startup cleanup: removed %d expired checkpoint conversation(s)", removed_checkpoints)
+    if trim_result.removed_upload_ids:
+        trimmed_uploads = await _cleanup_upload_records(trim_result.removed_upload_ids)
+        if trimmed_uploads:
+            logger.info("Startup cleanup: removed %d LRU-trimmed upload record(s)", trimmed_uploads)
 
     # Start background cleanup task
     cleanup_task = asyncio.create_task(_cleanup_loop(app))
@@ -266,6 +289,10 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down %s", settings.app_name)
     cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     pool = getattr(app.state, "pool", None)
     if pool is not None:
         await pool.close()

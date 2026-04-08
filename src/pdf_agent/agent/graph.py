@@ -16,6 +16,7 @@ from langgraph.graph import END, StateGraph
 from pdf_agent.agent.prompt import build_system_prompt, prepare_messages_for_model
 from pdf_agent.agent.state import AgentState, FileInfo
 from pdf_agent.agent.tools_adapter import get_adapted_tool_map, parse_tool_result_payload
+from pdf_agent.api.metrics import metrics
 from pdf_agent.config import settings
 from pdf_agent.tools.registry import ToolRegistry
 
@@ -106,6 +107,21 @@ def _make_agent_node(model_with_tools: ChatOpenAI):
         messages = [SystemMessage(content=sys_prompt)] + prepare_messages_for_model(messages)
 
         response = await model_with_tools.ainvoke(messages)
+        usage = getattr(response, "usage_metadata", None)
+        if isinstance(usage, dict):
+            input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+            if input_tokens or output_tokens:
+                metrics.record_llm_tokens(input_tokens, output_tokens)
+        else:
+            response_metadata = getattr(response, "response_metadata", None)
+            if isinstance(response_metadata, dict):
+                token_usage = response_metadata.get("token_usage")
+                if isinstance(token_usage, dict):
+                    input_tokens = int(token_usage.get("prompt_tokens") or 0)
+                    output_tokens = int(token_usage.get("completion_tokens") or 0)
+                    if input_tokens or output_tokens:
+                        metrics.record_llm_tokens(input_tokens, output_tokens)
         return {"messages": [response]}
 
     return agent_node
@@ -169,7 +185,7 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
             )
 
             # Parse output files from result string
-            output_files = parsed_result.output_files if parsed_result else parse_tool_result_payload(result_str).output_files
+            output_files = parsed_result.output_files if parsed_result else []
             if output_files:
                 latest_output_files = output_files
                 for fp in output_files:

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FileService, ConversationService, consumeSse } from './services/api';
 import { API_BASE_URL } from './services/config';
+import { MessageCard } from './components/MessageCard.jsx';
 import { truncateText, formatBytes, formatTime, mapConversationMessages, normalizeConversationTitle, fileExtension } from './utils';
 
 // Icons
@@ -47,6 +48,7 @@ function App() {
   const messageEndRef = useRef(null);
   const textareaRef = useRef(null);
   const streamingAssistantIdRef = useRef(null);
+  const streamingStepIdRef = useRef(null);
   const pendingArtifactUrlsRef = useRef([]);
   const abortControllerRef = useRef(null);
 
@@ -64,6 +66,7 @@ function App() {
     if (activate) {
       setCurrentConversationId(conversationId);
     }
+    streamingStepIdRef.current = null;
     setMessages(mapConversationMessages(conversation.messages || []));
     setArtifacts(nextArtifacts);
   }
@@ -267,6 +270,74 @@ function App() {
     });
   };
 
+  const upsertStepMessage = (patch) => {
+    const stepId = streamingStepIdRef.current || `step-${Date.now()}-${Math.random()}`;
+    streamingStepIdRef.current = stepId;
+    setMessages((current) => {
+      const next = [...current];
+      const index = next.findIndex((item) => item.id === stepId);
+      const base = index === -1 ? {
+        id: stepId,
+        kind: "step",
+        status: "RUNNING",
+        label: "处理中",
+        progress: 0,
+        progressLabel: "",
+        elapsedSeconds: null,
+        content: "",
+        warning: "",
+        downloads: [],
+      } : next[index];
+      const merged = {
+        ...base,
+        ...patch,
+      };
+      if (index === -1) {
+        next.push(merged);
+      } else {
+        next[index] = merged;
+      }
+      return next;
+    });
+  };
+
+  const finalizeStepMessage = (patch = {}) => {
+    const stepId = streamingStepIdRef.current;
+    if (!stepId) {
+      return;
+    }
+    setMessages((current) => current.map((item) => (
+      item.id === stepId
+        ? {
+            ...item,
+            status: item.status === "ERROR" ? item.status : "DONE",
+            progress: item.progress ?? 100,
+            ...patch,
+          }
+        : item
+    )));
+    streamingStepIdRef.current = null;
+  };
+
+  const attachDownloadsToCurrentStep = (downloads) => {
+    const stepId = streamingStepIdRef.current;
+    if (!stepId) {
+      return;
+    }
+    const nextDownloads = Array.from(new Set((downloads || []).filter(Boolean)));
+    if (nextDownloads.length === 0) {
+      return;
+    }
+    setMessages((current) => current.map((item) => (
+      item.id === stepId
+        ? {
+            ...item,
+            downloads: Array.from(new Set([...(item.downloads || []), ...nextDownloads])),
+          }
+        : item
+    )));
+  };
+
   const beginEditMessage = (message) => {
     setDraftMessage(message.content || "");
     setEditingMessageId(message.id);
@@ -450,6 +521,7 @@ function App() {
     setEditingOriginalText("");
 
     streamingAssistantIdRef.current = null;
+    streamingStepIdRef.current = null;
     pendingArtifactUrlsRef.current = [];
     abortControllerRef.current?.abort();
     const abortController = new AbortController();
@@ -516,6 +588,39 @@ function App() {
             setCurrentConversationId(data.conversation_id);
           }
         },
+        tool_start(data) {
+          setIsThinking(false);
+          if (streamingStepIdRef.current) {
+            finalizeStepMessage({ status: "DONE", progress: 100 });
+          }
+          upsertStepMessage({
+            status: "RUNNING",
+            label: data.label || data.name || "处理中",
+            progress: 0,
+            progressLabel: "开始执行",
+            content: "",
+            warning: "",
+            downloads: [],
+            elapsedSeconds: null,
+          });
+        },
+        progress(data) {
+          setIsThinking(false);
+          upsertStepMessage({
+            status: "RUNNING",
+            label: data.label || data.name || "处理中",
+            progress: Number.isFinite(data.percent) ? data.percent : undefined,
+            progressLabel: data.message || "处理中",
+          });
+        },
+        heartbeat(data) {
+          setIsThinking(false);
+          upsertStepMessage({
+            status: "RUNNING",
+            label: data.label || data.name || "处理中",
+            progressLabel: "处理中",
+          });
+        },
         token(data) {
           if (data.content) {
             setIsThinking(false);
@@ -530,9 +635,25 @@ function App() {
             ...pendingArtifactUrlsRef.current,
             ...data.files.filter(Boolean),
           ]));
+          attachDownloadsToCurrentStep(data.files);
           upsertAssistantDownloads(pendingArtifactUrlsRef.current);
         },
+        tool_end(data) {
+          const details = [data.warning, data.message].filter(Boolean).join("\n");
+          finalizeStepMessage({
+            status: data.warning ? "WARNING" : "DONE",
+            label: data.label || data.name || "处理中",
+            progress: 100,
+            progressLabel: data.warning ? "已完成，但需要注意" : "已完成",
+            elapsedSeconds: Number.isFinite(data.elapsed_seconds) ? data.elapsed_seconds : null,
+            warning: data.warning || "",
+            content: details,
+          });
+        },
         done() {
+          if (streamingStepIdRef.current) {
+            finalizeStepMessage({ status: "DONE", progress: 100, progressLabel: "已完成" });
+          }
           if (streamingAssistantIdRef.current) {
             upsertAssistantDownloads(pendingArtifactUrlsRef.current);
             return;
@@ -551,6 +672,11 @@ function App() {
         },
         error(data) {
           setIsThinking(false);
+          finalizeStepMessage({
+            status: "ERROR",
+            progressLabel: "执行失败",
+            content: data.message || "处理失败。",
+          });
           setSurfaceError(data.message || "处理失败。");
         }
       });
@@ -569,6 +695,7 @@ function App() {
       }
       setIsThinking(false);
       streamingAssistantIdRef.current = null;
+      streamingStepIdRef.current = null;
       pendingArtifactUrlsRef.current = [];
       setIsSending(false);
     }
@@ -699,7 +826,7 @@ function App() {
             </button>
             <div className="artifact-row-actions">
               <a
-                href={artifact.download_url}
+                href={resolveAssetUrl(artifact.download_url)}
                 download
                 className="artifact-action-btn"
                 title="下载文件"
@@ -777,7 +904,16 @@ function App() {
           ) : (
             messages.map((msg, index) => (
               <React.Fragment key={msg.id}>
-                {msg.kind !== 'step' && (
+                {msg.kind === 'step' ? (
+                  <div className="message-wrapper assistant step">
+                    <div className="message-content">
+                      <div className="avatar assistant">AI</div>
+                      <div className="message-column">
+                        <MessageCard message={msg} />
+                      </div>
+                    </div>
+                  </div>
+                ) : (
                   <div className={`message-wrapper ${msg.kind}`}>
                     <div className="message-content">
                       {msg.kind !== 'user' && (

@@ -131,7 +131,11 @@ class FormFillTool(BaseTool):
                                 f"Failed to fill form field '{name}'",
                             ) from exc
 
-                acroform["/NeedAppearances"] = pikepdf.Boolean(False)
+                if params["flatten"]:
+                    if Name("/NeedAppearances") in acroform:
+                        del acroform["/NeedAppearances"]
+                else:
+                    acroform["/NeedAppearances"] = pikepdf.Boolean(True)
 
             pdf.save(intermediate_path if params["flatten"] else output_path)
 

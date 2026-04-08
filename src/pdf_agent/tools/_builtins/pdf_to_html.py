@@ -9,7 +9,7 @@ from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools.filenames import localized_output_name
-from pdf_agent.tools.libreoffice import run_libreoffice_conversion
+from pdf_agent.tools.libreoffice import run_libreoffice_conversion_to_output
 
 
 class PdfToHtmlTool(BaseTool):
@@ -78,19 +78,17 @@ class PdfToHtmlTool(BaseTool):
     def _run_libreoffice(self, lo_bin: str, pdf_path: Path, workdir: Path, reporter) -> ToolResult:
         if reporter:
             reporter(10, "Converting with LibreOffice...")
-        success, failure_reason = run_libreoffice_conversion(
+        output_path = workdir / localized_output_name(pdf_path, "转HTML", ext=".html")
+        success, failure_reason = run_libreoffice_conversion_to_output(
             lo_bin,
             convert_to="html",
             input_path=pdf_path,
+            output_path=output_path,
             outdir=workdir,
             profile_dir=workdir / ".libreoffice-profile",
         )
         if not success:
             raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, failure_reason or "LibreOffice failed to convert to HTML")
-
-        output_path = workdir / localized_output_name(pdf_path, "转HTML", ext=".html")
-        if not output_path.exists():
-            raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, "LibreOffice produced no HTML file")
 
         if reporter:
             reporter(100, "Done")

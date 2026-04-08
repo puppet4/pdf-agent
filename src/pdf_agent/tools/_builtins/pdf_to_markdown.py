@@ -49,6 +49,7 @@ class PdfToMarkdownTool(BaseTool):
             reporter(10, "Extracting text...")
 
         lines = []
+        page_num = -1
         try:
             for page_num, page_layout in enumerate(extract_pages(str(inputs[0]))):
                 if reporter:
@@ -76,8 +77,9 @@ class PdfToMarkdownTool(BaseTool):
             reporter(100, "Done")
 
         word_count = len(md_content.split())
+        total_pages = page_num + 1
         return ToolResult(
             output_files=[output_path],
-            meta={"pages": page_num + 1, "word_count": word_count},
-            log=f"Converted to Markdown: {page_num + 1} pages, ~{word_count} words",
+            meta={"pages": total_pages, "word_count": word_count},
+            log=f"Converted to Markdown: {total_pages} pages, ~{word_count} words",
         )

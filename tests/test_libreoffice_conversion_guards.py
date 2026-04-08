@@ -32,7 +32,7 @@ def test_pdf_to_word_fallback_reports_engine_and_reason(
 ):
     monkeypatch.setattr("pdf_agent.tools._builtins.pdf_to_word.shutil.which", lambda _: "/usr/bin/soffice")
     monkeypatch.setattr(
-        "pdf_agent.tools._builtins.pdf_to_word.run_libreoffice_conversion",
+        "pdf_agent.tools._builtins.pdf_to_word.run_libreoffice_conversion_to_output",
         lambda *args, **kwargs: (False, "LibreOffice crashed"),
     )
 
@@ -52,7 +52,7 @@ def test_pdf_to_excel_fallback_reports_engine_and_reason(
 ):
     monkeypatch.setattr("pdf_agent.tools._builtins.pdf_to_office.shutil.which", lambda _: "/usr/bin/soffice")
     monkeypatch.setattr(
-        "pdf_agent.tools._builtins.pdf_to_office.run_libreoffice_conversion",
+        "pdf_agent.tools._builtins.pdf_to_office.run_libreoffice_conversion_to_output",
         lambda *args, **kwargs: (False, "LibreOffice failed"),
     )
 
@@ -71,7 +71,7 @@ def test_pdf_to_ppt_fallback_reports_engine_and_reason(
 ):
     monkeypatch.setattr("pdf_agent.tools._builtins.pdf_to_office.shutil.which", lambda _: "/usr/bin/soffice")
     monkeypatch.setattr(
-        "pdf_agent.tools._builtins.pdf_to_office.run_libreoffice_conversion",
+        "pdf_agent.tools._builtins.pdf_to_office.run_libreoffice_conversion_to_output",
         lambda *args, **kwargs: (False, "LibreOffice failed"),
     )
 

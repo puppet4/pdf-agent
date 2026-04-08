@@ -9,6 +9,7 @@ import queue
 import re
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -33,14 +34,17 @@ _ERROR_RESULT_RE = re.compile(r"^Error:\s*(?:\[(?P<code>[A-Z_]+)\]\s*)?(?P<messa
 # Concurrency limiter for CPU-intensive async tools
 # ---------------------------------------------------------------------------
 
-_ASYNC_SEMAPHORE: asyncio.Semaphore | None = None
+_ASYNC_SEMAPHORE: threading.Semaphore | None = None
+_SEMAPHORE_LOCK = threading.Lock()
 _MAX_CONCURRENT_ASYNC = 4  # max simultaneous OCR/compress/etc operations
 
 
-def _get_semaphore() -> asyncio.Semaphore:
+def _get_semaphore() -> threading.Semaphore:
     global _ASYNC_SEMAPHORE
     if _ASYNC_SEMAPHORE is None:
-        _ASYNC_SEMAPHORE = asyncio.Semaphore(_MAX_CONCURRENT_ASYNC)
+        with _SEMAPHORE_LOCK:
+            if _ASYNC_SEMAPHORE is None:
+                _ASYNC_SEMAPHORE = threading.Semaphore(_MAX_CONCURRENT_ASYNC)
     return _ASYNC_SEMAPHORE
 
 # ---------------------------------------------------------------------------
@@ -257,17 +261,23 @@ async def _execute_tool_with_state(
     try:
         with bind_conversation_run_context(conversation_id or None):
             if manifest.async_hint:
-                async with _get_semaphore():
-                    result = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            tool.run,
+                def _run_async_tool() -> ToolResult:
+                    semaphore = _get_semaphore()
+                    semaphore.acquire()
+                    try:
+                        return tool.run(
                             inputs=input_paths,
                             params=validated_params,
                             workdir=step_dir,
                             reporter=reporter,
-                        ),
-                        timeout=settings.external_cmd_timeout_sec,
-                    )
+                        )
+                    finally:
+                        semaphore.release()
+
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(_run_async_tool),
+                    timeout=settings.external_cmd_timeout_sec,
+                )
             else:
                 result = tool.run(
                     inputs=input_paths,
@@ -369,15 +379,16 @@ def adapt_all_tools(registry: ToolRegistry) -> list[StructuredTool]:
     return tools
 
 
-_ADAPTED_TOOL_MAP_CACHE: dict[ToolRegistry, tuple[int, dict[str, StructuredTool]]] = {}
+_ADAPTED_TOOL_MAP_CACHE: weakref.WeakKeyDictionary[ToolRegistry, tuple[tuple[str, ...], dict[str, StructuredTool]]] = weakref.WeakKeyDictionary()
 
 
 def get_adapted_tool_map(registry: ToolRegistry) -> dict[str, StructuredTool]:
     """Return a cached name -> StructuredTool map for the current registry snapshot."""
+    current_keys = tuple(sorted(t.name for t in registry.list_all()))
     cached = _ADAPTED_TOOL_MAP_CACHE.get(registry)
-    if cached is None or cached[0] != len(registry):
+    if cached is None or cached[0] != current_keys:
         tool_map = {tool.name: tool for tool in adapt_all_tools(registry)}
-        _ADAPTED_TOOL_MAP_CACHE[registry] = (len(registry), tool_map)
+        _ADAPTED_TOOL_MAP_CACHE[registry] = (current_keys, tool_map)
         return tool_map
     return cached[1]
 

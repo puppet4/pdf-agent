@@ -72,9 +72,9 @@ class BarcodeTool(BaseTool):
             raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, f"Barcode generation failed: {e}")
 
         from PIL import Image
-        bc_img = Image.open(bc_buf)
-        sw = params["width_pt"]
-        sh = sw * bc_img.height / bc_img.width
+        with Image.open(bc_buf) as bc_img:
+            sw = params["width_pt"]
+            sh = sw * bc_img.height / bc_img.width
 
         with pikepdf.open(inputs[0]) as pdf:
             total = len(pdf.pages)
@@ -94,11 +94,12 @@ class BarcodeTool(BaseTool):
                 c = canvas.Canvas(overlay_buf, pagesize=(pw, ph))
                 bc_buf.seek(0)
                 c.drawImage(ImageReader(bc_buf), x, y, width=sw, height=sh, mask="auto")
+                c.showPage()
                 c.save()
                 overlay_buf.seek(0)
 
-                overlay_pdf = pikepdf.Pdf.open(overlay_buf)
-                pikepdf.Page(page).add_overlay(overlay_pdf.pages[0])
+                with pikepdf.open(overlay_buf) as overlay_pdf:
+                    pikepdf.Page(page).add_overlay(overlay_pdf.pages[0])
 
             pdf.save(output_path)
 

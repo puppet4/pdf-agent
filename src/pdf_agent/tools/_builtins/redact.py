@@ -1,4 +1,4 @@
-"""Redact text or regions by overlaying opaque rectangles."""
+"""Redact text or regions — overlay opaque rectangles then rasterize to remove underlying text."""
 from __future__ import annotations
 
 import json
@@ -25,7 +25,7 @@ class RedactTool(BaseTool):
             name="redact",
             label="涂黑脱敏",
             category="security",
-            description="按文本关键词或矩形区域做黑框遮盖脱敏",
+            description="按文本关键词或矩形区域做脱敏处理。启用 Ghostscript 时会彻底移除底层文字；否则仅做视觉遮挡并返回显著警告。",
             inputs=ToolInputSpec(min=1, max=1),
             outputs=ToolOutputSpec(type="pdf"),
             params=[
@@ -34,7 +34,7 @@ class RedactTool(BaseTool):
                 ParamSpec(name="regions_json", label="区域 JSON", type="string", default="[]", description='如 [{"page":1,"x":10,"y":10,"width":100,"height":30}]'),
                 ParamSpec(name="fill_color", label="填充颜色", type="enum", options=["black", "white"], default="black"),
             ],
-            engine="pikepdf+pdftotext+reportlab",
+            engine="pikepdf+pdftotext+reportlab+ghostscript",
             async_hint=True,
         )
 
@@ -53,6 +53,7 @@ class RedactTool(BaseTool):
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
         params = self.validate(params)
         output_path = workdir / localized_output_name(inputs[0], "已脱敏")
+
         with pikepdf.open(inputs[0]) as pdf:
             page_count = len(pdf.pages)
             target_pages = set(parse_page_range(params["page_range"], page_count))
@@ -62,6 +63,8 @@ class RedactTool(BaseTool):
             if not boxes:
                 raise ToolError(ErrorCode.INVALID_PARAMS, "No redact targets found")
 
+            # Step 1: overlay opaque rectangles
+            redacted_page_indices: set[int] = set()
             color = black if params["fill_color"] == "black" else white
             for page_index, page in enumerate(pdf.pages, start=1):
                 if (page_index - 1) not in target_pages:
@@ -69,6 +72,7 @@ class RedactTool(BaseTool):
                 page_boxes = [box for box in boxes if box["page"] == page_index]
                 if not page_boxes:
                     continue
+                redacted_page_indices.add(page_index - 1)
                 mbox = page.mediabox
                 width = float(mbox[2] - mbox[0])
                 height = float(mbox[3] - mbox[1])
@@ -81,15 +85,116 @@ class RedactTool(BaseTool):
                 c.save()
                 with pikepdf.open(overlay_path) as overlay_pdf:
                     pikepdf.Page(page).add_overlay(overlay_pdf.pages[0])
+                overlay_path.unlink(missing_ok=True)
                 if reporter:
-                    reporter(int(page_index / page_count * 100))
-            pdf.save(output_path)
+                    reporter(int(page_index / page_count * 50))
 
-        return ToolResult(
-            output_files=[output_path],
-            meta={"redaction_count": len(boxes), "content_removed": False},
-            log=f"Applied {len(boxes)} visual redaction box(es)",
-        )
+            # Save intermediate PDF with overlays applied
+            intermediate_path = workdir / "redact_intermediate.pdf"
+            pdf.save(intermediate_path)
+
+        # Step 2: rasterize redacted pages to remove underlying text
+        content_removed = False
+        warning = ""
+        gs_bin = shutil.which("gs") or shutil.which("gswin64c") or shutil.which("ghostscript")
+        if gs_bin and redacted_page_indices:
+            try:
+                _rasterize_pages(
+                    gs_bin=gs_bin,
+                    input_path=intermediate_path,
+                    output_path=output_path,
+                    redacted_pages=redacted_page_indices,
+                    total_pages=page_count,
+                    workdir=workdir,
+                    reporter=reporter,
+                )
+                content_removed = True
+            except Exception as exc:
+                # Fall back to overlay-only if rasterization fails
+                shutil.copy2(intermediate_path, output_path)
+                warning = f"Ghostscript rasterization failed: {exc}. Underlying text may remain searchable."
+        else:
+            shutil.copy2(intermediate_path, output_path)
+            warning = "Ghostscript not found. Underlying text was not removed; this output is visual redaction only."
+
+        intermediate_path.unlink(missing_ok=True)
+
+        log = f"Applied {len(boxes)} redaction box(es)"
+        if content_removed:
+            log += " — underlying text removed via rasterization"
+        elif warning:
+            log += f" — WARNING: {warning}"
+
+        meta = {
+            "redaction_count": len(boxes),
+            "content_removed": content_removed,
+            "redaction_mode": "full" if content_removed else "visual_only",
+        }
+        if warning:
+            meta["warning"] = warning
+        return ToolResult(output_files=[output_path], meta=meta, log=log)
+
+
+def _rasterize_pages(
+    *,
+    gs_bin: str,
+    input_path: Path,
+    output_path: Path,
+    redacted_pages: set[int],
+    total_pages: int,
+    workdir: Path,
+    reporter: ProgressReporter | None = None,
+) -> None:
+    """Rasterize only the redacted pages and reassemble with untouched pages."""
+    with tempfile.TemporaryDirectory(dir=workdir) as tmpdir:
+        tmp = Path(tmpdir)
+
+        # Rasterize each redacted page individually at 200 DPI
+        rasterized_pdfs: dict[int, Path] = {}
+        for page_idx in sorted(redacted_pages):
+            page_num = page_idx + 1  # gs uses 1-based
+            img_prefix = tmp / f"page_{page_num:04d}"
+            run_command(
+                [
+                    gs_bin, "-dNOPAUSE", "-dBATCH", "-dSAFER",
+                    "-sDEVICE=png16m", "-r200",
+                    f"-dFirstPage={page_num}", f"-dLastPage={page_num}",
+                    f"-sOutputFile={img_prefix}.png",
+                    str(input_path),
+                ],
+                check=True,
+                timeout=60,
+            )
+            # Convert rasterized image back to PDF page
+            raster_pdf = tmp / f"page_{page_num:04d}.pdf"
+            run_command(
+                [
+                    gs_bin, "-dNOPAUSE", "-dBATCH", "-dSAFER",
+                    "-sDEVICE=pdfwrite",
+                    "-dCompatibilityLevel=1.5",
+                    "-dPDFFitPage",
+                    f"-sOutputFile={raster_pdf}",
+                    f"{img_prefix}.png",
+                ],
+                check=True,
+                timeout=60,
+            )
+            rasterized_pdfs[page_idx] = raster_pdf
+            if reporter:
+                reporter(50 + int((page_idx + 1) / total_pages * 40))
+
+        # Reassemble into a temp file, then swap into place once writes are complete.
+        staged_output_path = tmp / "redact_reassembled.pdf"
+        with pikepdf.open(input_path) as pdf:
+            for page_idx, raster_path in rasterized_pdfs.items():
+                with pikepdf.open(raster_path) as raster_pdf:
+                    pdf.pages[page_idx] = raster_pdf.pages[0]
+            pdf.save(staged_output_path)
+
+        shutil.move(str(staged_output_path), str(output_path))
+
+        if reporter:
+            reporter(100)
 
 
 def _normalize_regions(regions: list[dict]) -> list[dict[str, float | int]]:

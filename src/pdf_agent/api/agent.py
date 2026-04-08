@@ -1,13 +1,15 @@
 """Conversation API — chat streaming and artifact access."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import queue
 import re
 import shutil
+import time
 import uuid
 from pathlib import Path
-from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -21,6 +23,8 @@ from pdf_agent.agent.state import FileInfo
 from pdf_agent.agent.tools_adapter import parse_tool_result_payload
 from pdf_agent.config import settings
 from pdf_agent.db import async_session_factory
+from pdf_agent.api.http import content_disposition_headers
+from pdf_agent.api.metrics import metrics
 from pdf_agent.services import FileService
 
 logger = logging.getLogger(__name__)
@@ -37,20 +41,7 @@ _HEARTBEAT_INTERVAL = 5.0
 _DEFAULT_CONVERSATION_TITLE = "新会话"
 _MAX_CONVERSATION_TITLE_LENGTH = 48
 
-
-def _content_disposition_headers(filename: str, *, inline: bool) -> dict[str, str]:
-    disposition = "inline" if inline else "attachment"
-    safe_name = filename.replace("\\", "_").replace("\r", "").replace("\n", "").replace('"', "")
-    ascii_fallback = safe_name.encode("ascii", "ignore").decode("ascii").strip(" .")
-    if not ascii_fallback:
-        suffix = Path(safe_name).suffix.encode("ascii", "ignore").decode("ascii")
-        ascii_fallback = f"download{suffix}" if suffix else "download"
-    encoded_name = quote(safe_name, safe="")
-    return {
-        "Content-Disposition": (
-            f'{disposition}; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_name}'
-        )
-    }
+_content_disposition_headers = content_disposition_headers
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +232,23 @@ def _sanitize_arg_value(key: str, value):
     return value
 
 
+def _format_tool_label(tool_name: str) -> str:
+    return tool_name.replace("_", " ").strip().title() if tool_name else "Tool"
+
+
+def _tool_client_summary(tool_name: str, parsed_result) -> dict[str, object]:
+    meta = parsed_result.meta if parsed_result else {}
+    warning = meta.get("warning") if isinstance(meta, dict) and isinstance(meta.get("warning"), str) else ""
+    log = parsed_result.log.strip() if parsed_result and parsed_result.log else ""
+    return {
+        "name": tool_name,
+        "label": _format_tool_label(tool_name),
+        "message": log,
+        "warning": warning,
+        "elapsed_seconds": parsed_result.elapsed_seconds if parsed_result else None,
+    }
+
+
 def _paths_to_download_urls(conversation_id: str, file_paths: list[str]) -> list[str]:
     """Convert absolute file paths to conversation artifact URLs."""
     urls = []
@@ -374,47 +382,48 @@ async def _load_conversation_messages(conversation_id: str, request: Request) ->
     if graph is None:
         return messages
 
+    config = {"configurable": {"thread_id": conversation_id}}
     try:
-        config = {"configurable": {"thread_id": conversation_id}}
         state = await graph.aget_state(config)
-        if state and state.values:
-            pending_output_files: list[str] = []
-            for msg in state.values.get("messages", []):
-                if msg.type == "tool":
-                    parsed = parse_tool_result_payload(
-                        msg.content if isinstance(getattr(msg, "content", ""), str) else ""
-                    )
-                    pending_output_files.extend(parsed.output_files)
-                    artifact = getattr(msg, "artifact", None)
-                    if isinstance(artifact, dict):
-                        output_files = artifact.get("output_files", [])
-                        if isinstance(output_files, list):
-                            pending_output_files.extend(
-                                path for path in output_files if isinstance(path, str) and path
-                            )
-                    continue
-
-                msg_data = {"type": msg.type, "content": ""}
-                if hasattr(msg, "content"):
-                    content = msg.content
-                    msg_data["content"] = content if isinstance(content, str) else str(content)
-                if msg.type == "human":
-                    additional_kwargs = getattr(msg, "additional_kwargs", None)
-                    if isinstance(additional_kwargs, dict):
-                        selected_inputs = additional_kwargs.get("selected_inputs")
-                        if isinstance(selected_inputs, list):
-                            msg_data["attachments"] = [
-                                item for item in selected_inputs
-                                if isinstance(item, dict) and isinstance(item.get("name"), str)
-                            ]
-                if msg.type == "ai" and pending_output_files:
-                    deduped_files = list(dict.fromkeys(pending_output_files))
-                    msg_data["files"] = _paths_to_download_urls(conversation_id, deduped_files)
-                    pending_output_files = []
-                messages.append(msg_data)
     except Exception:
         logger.warning("Failed to load conversation state for %s", conversation_id, exc_info=True)
         raise HTTPException(status_code=503, detail="Conversation state unavailable")
+
+    if state and state.values:
+        pending_output_files: list[str] = []
+        for msg in state.values.get("messages", []):
+            if msg.type == "tool":
+                parsed = parse_tool_result_payload(
+                    msg.content if isinstance(getattr(msg, "content", ""), str) else ""
+                )
+                pending_output_files.extend(parsed.output_files)
+                artifact = getattr(msg, "artifact", None)
+                if isinstance(artifact, dict):
+                    output_files = artifact.get("output_files", [])
+                    if isinstance(output_files, list):
+                        pending_output_files.extend(
+                            path for path in output_files if isinstance(path, str) and path
+                        )
+                continue
+
+            msg_data = {"type": msg.type, "content": ""}
+            if hasattr(msg, "content"):
+                content = msg.content
+                msg_data["content"] = content if isinstance(content, str) else str(content)
+            if msg.type == "human":
+                additional_kwargs = getattr(msg, "additional_kwargs", None)
+                if isinstance(additional_kwargs, dict):
+                    selected_inputs = additional_kwargs.get("selected_inputs")
+                    if isinstance(selected_inputs, list):
+                        msg_data["attachments"] = [
+                            item for item in selected_inputs
+                            if isinstance(item, dict) and isinstance(item.get("name"), str)
+                        ]
+            if msg.type == "ai" and pending_output_files:
+                deduped_files = list(dict.fromkeys(pending_output_files))
+                msg_data["files"] = _paths_to_download_urls(conversation_id, deduped_files)
+                pending_output_files = []
+            messages.append(msg_data)
     return messages
 
 
@@ -521,15 +530,19 @@ async def delete_conversation(conversation_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     checkpointer = getattr(request.app.state, "checkpointer", None)
+    checkpoint_failed = False
     if checkpointer is not None:
         try:
             await checkpointer.adelete_thread(conversation_id)
         except Exception:
             logger.warning("Failed to delete checkpoint state for %s", conversation_id, exc_info=True)
-            raise HTTPException(status_code=500, detail="Failed to delete conversation state")
+            checkpoint_failed = True
 
     shutil.rmtree(conversation_dir)
-    return {"deleted": True, "id": conversation_id}
+    result = {"deleted": True, "id": conversation_id}
+    if checkpoint_failed:
+        result["warning"] = "Checkpoint state could not be removed"
+    return result
 
 
 @router.get("/api/conversations/{conversation_id}/artifacts")
@@ -612,10 +625,47 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
 
         # Import progress queue helpers
         from pdf_agent.agent.tools_adapter import get_progress_queue, release_progress_queue
-        get_progress_queue(conversation_id)
+        progress_queue = get_progress_queue(conversation_id)
+        stream_iter = graph.astream_events(input_state, config=config, version="v2").__aiter__()
+        current_tool_name = ""
+        started_at = time.perf_counter()
+        last_heartbeat_at = started_at
+        run_status = "SUCCESS"
+
+        def drain_progress_updates() -> list[dict[str, object]]:
+            updates: list[dict[str, object]] = []
+            while True:
+                try:
+                    item = progress_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if isinstance(item, dict):
+                    updates.append(item)
+            return updates
 
         try:
-            async for event in graph.astream_events(input_state, config=config, version="v2"):
+            while True:
+                try:
+                    event = await asyncio.wait_for(stream_iter.__anext__(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    for update in drain_progress_updates():
+                        yield _sse_event("progress", {
+                            "name": current_tool_name,
+                            "label": _format_tool_label(current_tool_name),
+                            "percent": update.get("percent"),
+                            "message": update.get("message", ""),
+                        })
+                        last_heartbeat_at = time.perf_counter()
+                    if current_tool_name and time.perf_counter() - last_heartbeat_at >= _HEARTBEAT_INTERVAL:
+                        yield _sse_event("heartbeat", {
+                            "name": current_tool_name,
+                            "label": _format_tool_label(current_tool_name),
+                        })
+                        last_heartbeat_at = time.perf_counter()
+                    continue
+                except StopAsyncIteration:
+                    break
+
                 kind = event["event"]
 
                 # LLM token streaming
@@ -624,8 +674,25 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                     if chunk.content:
                         yield _sse_event("token", {"content": chunk.content})
 
+                elif kind == "on_tool_start":
+                    current_tool_name = str(event.get("name") or "tool")
+                    tool_input = event.get("data", {}).get("input", {})
+                    yield _sse_event("tool_start", {
+                        "name": current_tool_name,
+                        "label": _format_tool_label(current_tool_name),
+                        "args": _sanitize_tool_args(tool_input) if isinstance(tool_input, dict) else {},
+                    })
+                    last_heartbeat_at = time.perf_counter()
+
                 # Tool end — only expose output files, not internal tool details
                 elif kind == "on_tool_end":
+                    for update in drain_progress_updates():
+                        yield _sse_event("progress", {
+                            "name": current_tool_name,
+                            "label": _format_tool_label(current_tool_name),
+                            "percent": update.get("percent"),
+                            "message": update.get("message", ""),
+                        })
                     output = event["data"].get("output", "")
                     parsed = parse_tool_result_payload(output) if isinstance(output, str) else None
                     file_paths = parsed.output_files if parsed else _extract_output_files(output)
@@ -633,11 +700,23 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                         yield _sse_event("artifact", {
                             "files": _paths_to_download_urls(conversation_id, file_paths),
                         })
+                    tool_name = str(event.get("name") or current_tool_name or "tool")
+                    yield _sse_event("tool_end", _tool_client_summary(tool_name, parsed))
+                    current_tool_name = ""
+                    last_heartbeat_at = time.perf_counter()
 
+        except asyncio.CancelledError:
+            run_status = "CANCELLED"
+            raise
         except Exception as e:
+            run_status = "ERROR"
             logger.exception("Agent stream error")
             yield _sse_event("error", {"message": _format_agent_stream_error(e)})
         finally:
+            metrics.record_conversation_run(
+                status=run_status,
+                duration=time.perf_counter() - started_at,
+            )
             release_progress_queue(conversation_id)
 
         yield _sse_event("done", {})

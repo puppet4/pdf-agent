@@ -74,84 +74,82 @@ class CompareTool(BaseTool):
         color_map = {"red": (255, 0, 0, 120), "yellow": (255, 255, 0, 120), "blue": (0, 100, 255, 120)}
         highlight_rgba = color_map[params["highlight_color"]]
 
-        with pikepdf.open(inputs[0]) as pdf1, pikepdf.open(inputs[1]) as pdf2:
-            pages1 = len(pdf1.pages)
-            pages2 = len(pdf2.pages)
+        with pikepdf.open(inputs[0]) as pdf1_handle, pikepdf.open(inputs[1]) as pdf2_handle:
+            pages1 = len(pdf1_handle.pages)
+            pages2 = len(pdf2_handle.pages)
 
-        max_pages = max(pages1, pages2)
-        diff_pages = []
-        diff_count = 0
-        text_diffs: list[dict[str, object]] = []
+            max_pages = max(pages1, pages2)
+            diff_pages = []
+            diff_count = 0
+            text_diffs: list[dict[str, object]] = []
 
-        for i in range(max_pages):
-            if reporter:
-                reporter(int(i / max_pages * 90), f"Comparing page {i+1}/{max_pages}")
+            for i in range(max_pages):
+                if reporter:
+                    reporter(int(i / max_pages * 90), f"Comparing page {i+1}/{max_pages}")
 
-            img1 = _render_page_png(inputs[0], i) if i < pages1 else None
-            img2 = _render_page_png(inputs[1], i) if i < pages2 else None
+                img1 = _render_page_png(inputs[0], i) if i < pages1 else None
+                img2 = _render_page_png(inputs[1], i) if i < pages2 else None
 
-            text1 = ""
-            text2 = ""
-            with pikepdf.open(inputs[0]) as pdf1:
-                if i < len(pdf1.pages):
-                    text1 = _extract_page_text(pdf1.pages[i]).strip()
-            with pikepdf.open(inputs[1]) as pdf2:
-                if i < len(pdf2.pages):
-                    text2 = _extract_page_text(pdf2.pages[i]).strip()
-            if text1 != text2:
-                text_diffs.append(
-                    {
-                        "page": i + 1,
-                        "left_chars": len(text1),
-                        "right_chars": len(text2),
-                        "unified_diff": list(
-                            difflib.unified_diff(
-                                text1.splitlines(),
-                                text2.splitlines(),
-                                fromfile="left",
-                                tofile="right",
-                                lineterm="",
-                            )
-                        ),
-                    }
-                )
+                text1 = ""
+                text2 = ""
+                if i < len(pdf1_handle.pages):
+                    text1 = _extract_page_text(pdf1_handle.pages[i]).strip()
+                if i < len(pdf2_handle.pages):
+                    text2 = _extract_page_text(pdf2_handle.pages[i]).strip()
+                if text1 != text2:
+                    text_diffs.append(
+                        {
+                            "page": i + 1,
+                            "left_chars": len(text1),
+                            "right_chars": len(text2),
+                            "unified_diff": list(
+                                difflib.unified_diff(
+                                    text1.splitlines(),
+                                    text2.splitlines(),
+                                    fromfile="left",
+                                    tofile="right",
+                                    lineterm="",
+                                )
+                            ),
+                        }
+                    )
 
-            if img1 is None and img2 is None:
-                continue
+                if img1 is None and img2 is None:
+                    continue
 
-            if img1 is None or img2 is None:
-                # One PDF has this page, other doesn't — fully different
-                base = img1 or img2
-                overlay = Image.new("RGBA", base.size, highlight_rgba)
-                base_rgba = base.convert("RGBA")
-                diff_img = Image.alpha_composite(base_rgba, overlay).convert("RGB")
-                diff_pages.append(diff_img)
-                diff_count += 1
-                continue
+                if img1 is None or img2 is None:
+                    # One PDF has this page, other doesn't — fully different
+                    base = img1 or img2
+                    overlay = Image.new("RGBA", base.size, highlight_rgba)
+                    base_rgba = base.convert("RGBA")
+                    diff_img = Image.alpha_composite(base_rgba, overlay).convert("RGB")
+                    diff_pages.append(diff_img)
+                    diff_count += 1
+                    continue
 
-            # Resize to same size
-            if img1.size != img2.size:
-                img2 = img2.resize(img1.size, Image.LANCZOS)
+                # Resize to same size
+                if img1.size != img2.size:
+                    img2 = img2.resize(img1.size, Image.LANCZOS)
 
-            diff = ImageChops.difference(img1, img2)
-            threshold = params["sensitivity"]
+                diff = ImageChops.difference(img1, img2)
+                threshold = params["sensitivity"]
 
-            # Create highlight mask using PIL operations (fast, no pixel loop)
-            diff_gray = diff.convert("L")
-            mask = diff_gray.point(lambda p: 255 if p > threshold else 0)
+                # Create highlight mask using PIL operations (fast, no pixel loop)
+                diff_gray = diff.convert("L")
+                mask = diff_gray.point(lambda p: 255 if p > threshold else 0)
 
-            # Create highlight overlay and paste using mask
-            r, g, b, a = highlight_rgba
-            highlight_color = Image.new("RGBA", img1.size, (r, g, b, a))
-            base_rgba = img1.convert("RGBA")
-            # Expand mask to RGBA for paste
-            mask_rgba = mask.convert("L")
-            base_rgba.paste(highlight_color, mask=mask_rgba)
-            result = base_rgba.convert("RGB")
-            diff_pages.append(result)
+                # Create highlight overlay and paste using mask
+                r, g, b, a = highlight_rgba
+                highlight_color = Image.new("RGBA", img1.size, (r, g, b, a))
+                base_rgba = img1.convert("RGBA")
+                # Expand mask to RGBA for paste
+                mask_rgba = mask.convert("L")
+                base_rgba.paste(highlight_color, mask=mask_rgba)
+                result = base_rgba.convert("RGB")
+                diff_pages.append(result)
 
-            if mask.getbbox() is not None:
-                diff_count += 1
+                if mask.getbbox() is not None:
+                    diff_count += 1
 
         if not diff_pages:
             raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, "Could not render pages for comparison (pdftoppm required)")
