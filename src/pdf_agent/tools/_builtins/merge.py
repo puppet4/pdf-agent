@@ -90,15 +90,20 @@ class MergeTool(BaseTool):
                             pdf_out.pages.extend(insert_pdf.pages)
                     if insert_after >= len(base_pdf.pages):
                         pass
+                pdf_out.save(output_path)
             finally:
                 for pdf in opened:
                     pdf.close()
 
-        pdf_out.save(output_path)
+        if mode == "sequential":
+            pdf_out.save(output_path)
         pdf_out.close()
+
+        with pikepdf.open(output_path) as result_pdf:
+            page_count = len(result_pdf.pages)
 
         return ToolResult(
             output_files=[output_path],
-            meta={"page_count": len(pikepdf.open(output_path).pages)},
+            meta={"page_count": page_count},
             log=f"Merged {len(inputs)} files ({mode})",
         )

@@ -88,11 +88,12 @@ class PageBorderTool(BaseTool):
                 c.setLineWidth(bw)
                 c.rect(m + bw/2, m + bw/2, pw - 2*m - bw, ph - 2*m - bw, fill=0, stroke=1)
 
+                c.showPage()
                 c.save()
                 overlay_buf.seek(0)
 
-                overlay_pdf = pikepdf.Pdf.open(overlay_buf)
-                pikepdf.Page(page).add_overlay(overlay_pdf.pages[0])
+                with pikepdf.open(overlay_buf) as overlay_pdf:
+                    pikepdf.Page(page).add_overlay(overlay_pdf.pages[0])
 
             pdf.save(output_path)
 

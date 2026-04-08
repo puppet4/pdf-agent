@@ -50,16 +50,14 @@ def parse_page_range(expr: str, total_pages: int) -> list[int]:
 
 
 def _resolve_last(expr: str, total_pages: int) -> str:
-    """Resolve 'last' keyword: 'last' -> total, 'last-N' -> total-N+1."""
-    import re as _re
-
-    def _replace(m: _re.Match) -> str:
+    """Resolve 'last' keyword: 'last' -> total, 'last-N' -> total-N."""
+    def _replace(m: re.Match[str]) -> str:
         offset = m.group(1)
         if offset:
             return str(total_pages - int(offset))
         return str(total_pages)
 
-    return _re.sub(r"last(?:-(\d+))?", _replace, expr)
+    return re.sub(r"last(?:-(\d+))?", _replace, expr)
 
 
 def _validate_bounds(start: int, end: int, total_pages: int) -> None:

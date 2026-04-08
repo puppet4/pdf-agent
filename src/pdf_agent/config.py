@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     expose_api_docs: bool = False
 
     # --- Database (async for FastAPI) ---
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent"
+    database_url: str = "postgresql+asyncpg://localhost:5432/pdf_agent"
 
     # --- OpenAI / LLM ---
     openai_api_key: str = ""
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 200
     max_page_count: int = 2000
     external_cmd_timeout_sec: int = 1800  # 30 min
-    libreoffice_timeout_sec: int = 10
+    libreoffice_timeout_sec: int = 120
 
     # --- Access Control ---
     api_key: str = ""  # if set, require X-API-Key header for all API calls

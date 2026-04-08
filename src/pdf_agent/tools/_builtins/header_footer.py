@@ -82,13 +82,15 @@ class HeaderFooterTool(BaseTool):
                     c.drawCentredString(pw / 2, ph - params["margin"], header_text)
 
                 if footer_text:
-                    c.drawCentredString(pw / 2, params["margin"] - params["font_size"], footer_text)
+                    footer_y = max(2, params["margin"] - params["font_size"])
+                    c.drawCentredString(pw / 2, footer_y, footer_text)
 
+                c.showPage()
                 c.save()
                 buf.seek(0)
 
-                overlay_pdf = pikepdf.Pdf.open(buf)
-                pikepdf.Page(page).add_overlay(overlay_pdf.pages[0])
+                with pikepdf.open(buf) as overlay_pdf:
+                    pikepdf.Page(page).add_overlay(overlay_pdf.pages[0])
 
             pdf.save(output_path)
 

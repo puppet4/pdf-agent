@@ -86,11 +86,12 @@ class QrCodeTool(BaseTool):
                 c = canvas.Canvas(overlay_buf, pagesize=(pw, ph))
                 qr_buf.seek(0)
                 c.drawImage(ImageReader(qr_buf), x, y, width=size, height=size, mask="auto")
+                c.showPage()
                 c.save()
                 overlay_buf.seek(0)
 
-                overlay_pdf = pikepdf.Pdf.open(overlay_buf)
-                pikepdf.Page(page).add_overlay(overlay_pdf.pages[0])
+                with pikepdf.open(overlay_buf) as overlay_pdf:
+                    pikepdf.Page(page).add_overlay(overlay_pdf.pages[0])
 
             pdf.save(output_path)
 

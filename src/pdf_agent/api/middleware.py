@@ -1,6 +1,7 @@
 """API middleware — authentication, rate limiting, request tracing."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -92,11 +93,17 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
+_AUTH_EXEMPT_PATHS = {"/healthz"}
+
+
 class ApiKeyMiddleware(BaseHTTPMiddleware):
     """Require X-API-Key header when api_key is configured."""
 
     async def dispatch(self, request: Request, call_next):
         if not settings.api_key:
+            return await call_next(request)
+
+        if request.url.path in _AUTH_EXEMPT_PATHS:
             return await call_next(request)
 
         provided = request.headers.get("X-API-Key")
@@ -132,6 +139,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         client_key = request.headers.get("X-API-Key") or (request.client.host if request.client else "unknown")
+
+        blocked = await asyncio.to_thread(self._check_and_record, client_key)
+        if blocked:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": f"Rate limit exceeded. Max {settings.rate_limit_rpm} requests/minute."
+                },
+            )
+        return await call_next(request)
+
+    @staticmethod
+    def _check_and_record(client_key: str) -> bool:
+        """Synchronous rate-limit check — runs in a thread to avoid blocking the event loop."""
         now = time.time()
         window_start = now - 60
 
@@ -145,14 +166,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             requests = state.get(client_key, [])
 
             if len(requests) >= settings.rate_limit_rpm:
-                return JSONResponse(
-                    status_code=429,
-                    content={
-                        "detail": f"Rate limit exceeded. Max {settings.rate_limit_rpm} requests/minute."
-                    },
-                )
+                return True
 
             requests.append(now)
             state[client_key] = requests
             _save_rate_limit_state(state)
-        return await call_next(request)
+        return False

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 
 from fastapi import APIRouter, Request, Response
@@ -17,45 +18,56 @@ class _Metrics:
     """In-process metrics store with Prometheus text exposition."""
 
     def __init__(self):
+        self._lock = threading.Lock()
         self.request_count: dict[str, int] = {}        # method:path:status
         self.request_duration: dict[str, tuple[int, float]] = {}  # method:path -> (count, total)
         self.tool_count: dict[str, int] = {}            # tool_name
         self.tool_duration: dict[str, tuple[int, float]] = {} # tool_name -> (count, total)
         self.conversation_run_count: dict[str, int] = {}
+        self.conversation_duration: dict[str, tuple[int, float]] = {}
         self.llm_tokens_in: int = 0
         self.llm_tokens_out: int = 0
 
     def record_request(self, method: str, path: str, status: int, duration: float):
         key = f'{method}:{path}:{status}'
-        self.request_count[key] = self.request_count.get(key, 0) + 1
-        dur_key = f'{method}:{path}'
-        count, total = self.request_duration.get(dur_key, (0, 0.0))
-        self.request_duration[dur_key] = (count + 1, total + duration)
+        with self._lock:
+            self.request_count[key] = self.request_count.get(key, 0) + 1
+            dur_key = f'{method}:{path}'
+            count, total = self.request_duration.get(dur_key, (0, 0.0))
+            self.request_duration[dur_key] = (count + 1, total + duration)
 
     def record_tool(self, name: str, duration: float):
-        self.tool_count[name] = self.tool_count.get(name, 0) + 1
-        count, total = self.tool_duration.get(name, (0, 0.0))
-        self.tool_duration[name] = (count + 1, total + duration)
+        with self._lock:
+            self.tool_count[name] = self.tool_count.get(name, 0) + 1
+            count, total = self.tool_duration.get(name, (0, 0.0))
+            self.tool_duration[name] = (count + 1, total + duration)
 
     def record_conversation_run(self, *, status: str, duration: float | None):
-        self.conversation_run_count[status] = self.conversation_run_count.get(status, 0) + 1
-        if duration is not None:
-            key = f"duration:{status}"
-            count, total = self.tool_duration.get(key, (0, 0.0))
-            self.tool_duration[key] = (count + 1, total + duration)
+        with self._lock:
+            self.conversation_run_count[status] = self.conversation_run_count.get(status, 0) + 1
+            if duration is not None:
+                count, total = self.conversation_duration.get(status, (0, 0.0))
+                self.conversation_duration[status] = (count + 1, total + duration)
 
     def record_llm_tokens(self, input_tokens: int, output_tokens: int):
-        self.llm_tokens_in += input_tokens
-        self.llm_tokens_out += output_tokens
+        with self._lock:
+            self.llm_tokens_in += input_tokens
+            self.llm_tokens_out += output_tokens
 
     def exposition(self) -> str:
-        lines: list[str] = []
+        with self._lock:
+            return self._exposition_unlocked()
+
+    def _exposition_unlocked(self) -> str:
+        lines: list[str] = ["# HELP pdf_agent_http_requests_total Total HTTP requests",
+                            "# TYPE pdf_agent_http_requests_total counter"]
 
         # Request counter
-        lines.append("# HELP pdf_agent_http_requests_total Total HTTP requests")
-        lines.append("# TYPE pdf_agent_http_requests_total counter")
         for key, count in sorted(self.request_count.items()):
-            method, path, status = key.split(":", 2)
+            try:
+                method, path, status = key.split(":", 2)
+            except ValueError:
+                continue
             lines.append(f'pdf_agent_http_requests_total{{method="{method}",path="{path}",status="{status}"}} {count}')
 
         # Request duration
@@ -83,6 +95,12 @@ class _Metrics:
         lines.append("# TYPE pdf_agent_conversation_runs_total counter")
         for status, count in sorted(self.conversation_run_count.items()):
             lines.append(f'pdf_agent_conversation_runs_total{{status="{status}"}} {count}')
+
+        lines.append("# HELP pdf_agent_conversation_run_duration_seconds Conversation run duration")
+        lines.append("# TYPE pdf_agent_conversation_run_duration_seconds summary")
+        for status, (count, total) in sorted(self.conversation_duration.items()):
+            lines.append(f'pdf_agent_conversation_run_duration_seconds_sum{{status="{status}"}} {total:.4f}')
+            lines.append(f'pdf_agent_conversation_run_duration_seconds_count{{status="{status}"}} {count}')
 
         # LLM tokens
         lines.append("# HELP pdf_agent_llm_tokens_total Total LLM tokens")

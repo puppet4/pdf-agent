@@ -23,6 +23,10 @@ from pdf_agent.storage import storage
 
 logger = logging.getLogger(__name__)
 
+
+class FilePersistenceError(RuntimeError):
+    """Raised when file bytes were written but metadata persistence failed."""
+
 # Magic byte signatures for file type validation
 _MAGIC_SIGNATURES: dict[str, list[bytes]] = {
     "application/pdf": [b"%PDF"],
@@ -75,9 +79,13 @@ def _validate_declared_content(content: bytes, declared_mime: str) -> bool:
 
 
 def _validate_declared_content_path(path: Path, declared_mime: str) -> bool:
+    if declared_mime == "image/webp":
+        with path.open("rb") as fh:
+            header = fh.read(16)
+        return header[:4] == b"RIFF" and header[8:12] == b"WEBP"
     with path.open("rb") as fh:
         header = fh.read(64)
-    if not _validate_magic_bytes(header if declared_mime != "image/webp" else path.read_bytes()[:16], declared_mime):
+    if not _validate_magic_bytes(header, declared_mime):
         return False
     required_prefix = _OOXML_PREFIXES.get(declared_mime)
     if not required_prefix:
@@ -190,6 +198,23 @@ class FileService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def _cleanup_removed_upload_records(self, upload_ids: list[str]) -> int:
+        parsed_ids: list[uuid.UUID] = []
+        for upload_id in upload_ids:
+            try:
+                parsed_ids.append(uuid.UUID(upload_id))
+            except ValueError:
+                continue
+        if not parsed_ids:
+            return 0
+
+        result = await self.session.execute(select(FileRecord).where(FileRecord.id.in_(parsed_ids)))
+        records = result.scalars().all()
+        for record in records:
+            await self.session.delete(record)
+        await self.session.commit()
+        return len(records)
+
     async def upload(self, filename: str, content_type: str, content: bytes) -> FileRecord:
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(delete=False, dir=settings.data_dir) as tmp:
@@ -205,7 +230,13 @@ class FileService:
             temp_path.unlink(missing_ok=True)
 
     async def upload_from_path(self, filename: str, content_type: str, temp_path: Path) -> FileRecord:
-        storage.trim_storage_lru()
+        trim_result = storage.trim_storage_lru_details(include_conversations=False, include_uploads=True)
+        if trim_result.removed_upload_ids:
+            try:
+                await self._cleanup_removed_upload_records(trim_result.removed_upload_ids)
+            except Exception:
+                await self.session.rollback()
+                logger.warning("Failed to sync upload records after LRU trim", exc_info=True)
         if storage.dir_size_bytes() > storage.storage_limit_bytes():
             raise PDFAgentError(
                 ErrorCode.STORAGE_LIMIT_EXCEEDED,
@@ -276,10 +307,15 @@ class FileService:
             except Exception:
                 logger.warning("Rollback failed after upload DB write error", exc_info=True)
             logger.warning(
-                "Database write failed for upload %s; continuing with filesystem-backed record",
+                "Database write failed for upload %s; removing filesystem copy",
                 file_id,
                 exc_info=True,
             )
+            try:
+                shutil.rmtree(path.parent, ignore_errors=True)
+            except Exception:
+                logger.warning("Failed to remove upload directory after DB write failure", exc_info=True)
+            raise FilePersistenceError("Failed to persist uploaded file metadata")
         return record
 
     async def list_records(self) -> list[FileRecord]:

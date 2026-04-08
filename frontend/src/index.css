@@ -300,6 +300,57 @@ a {
   position: relative;
 }
 
+.message-wrapper.step {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.message-card.step {
+  width: min(78%, 720px);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: var(--shadow-sm);
+  padding: 14px 16px;
+}
+
+.message-card.step.running {
+  border-color: rgba(16, 163, 127, 0.28);
+}
+
+.message-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.message-role {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.message-meta {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.message-warning {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .message-files-shell {
   display: flex;
   max-width: 100%;

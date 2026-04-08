@@ -108,7 +108,8 @@ class SignatureTool(BaseTool):
             ph = float(mbox[3]) - float(mbox[1])
 
             # Load signature with opacity
-            sig_img = Image.open(sig_path).convert("RGBA")
+            with Image.open(sig_path) as opened_signature:
+                sig_img = opened_signature.convert("RGBA")
             r, g, b, a = sig_img.split()
             a = a.point(lambda x: int(x * params["opacity"]))
             sig_img = Image.merge("RGBA", (r, g, b, a))
@@ -128,12 +129,14 @@ class SignatureTool(BaseTool):
             c = canvas.Canvas(overlay_buf, pagesize=(pw, ph))
             sig_buf.seek(0)
             c.drawImage(ImageReader(sig_buf), x, y, width=sw, height=sh, mask="auto")
+            c.showPage()
             c.save()
             overlay_buf.seek(0)
 
-            overlay = pikepdf.Pdf.open(overlay_buf)
-            pikepdf.Page(page).add_overlay(overlay.pages[0])
+            with pikepdf.open(overlay_buf) as overlay:
+                pikepdf.Page(page).add_overlay(overlay.pages[0])
             pdf.save(output_path)
+            sig_img.close()
 
     def _apply_digital_signature(self, input_pdf: Path, cert_path: Path, output_path: Path, params: dict) -> None:
         try:

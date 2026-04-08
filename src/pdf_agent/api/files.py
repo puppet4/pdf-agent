@@ -7,7 +7,6 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -17,30 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, PDFAgentError
+from pdf_agent.api.http import content_disposition_headers
 from pdf_agent.db import get_session
 from pdf_agent.db.models import FileRecord
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.file import FileUploadResponse
-from pdf_agent.services import FileService, load_storage_record
+from pdf_agent.services import FilePersistenceError, FileService, load_storage_record
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 logger = logging.getLogger(__name__)
-
-
-def _content_disposition_headers(filename: str, *, inline: bool) -> dict[str, str]:
-    disposition = "inline" if inline else "attachment"
-    safe_name = filename.replace("\\", "_").replace("\r", "").replace("\n", "").replace('"', "")
-    ascii_fallback = safe_name.encode("ascii", "ignore").decode("ascii").strip(" .")
-    if not ascii_fallback:
-        suffix = Path(safe_name).suffix.encode("ascii", "ignore").decode("ascii")
-        ascii_fallback = f"download{suffix}" if suffix else "download"
-    encoded_name = quote(safe_name, safe="")
-    return {
-        "Content-Disposition": (
-            f'{disposition}; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_name}'
-        )
-    }
-
+_content_disposition_headers = content_disposition_headers
 
 def _normalize_upload_content_type(filename: str, content_type: str | None) -> str:
     """Prefer the browser MIME type, but recover known types from filename when generic."""
@@ -49,10 +34,6 @@ def _normalize_upload_content_type(filename: str, content_type: str | None) -> s
         return normalized
     guessed, _ = mimetypes.guess_type(filename)
     return guessed or "application/octet-stream"
-
-
-async def _read_upload_content(file: UploadFile) -> bytes:
-    raise RuntimeError("_read_upload_content has been replaced by _spill_upload_to_tempfile")
 
 
 async def _spill_upload_to_tempfile(file: UploadFile, tmp_path: Path | None = None) -> Path:
@@ -140,6 +121,8 @@ async def upload_file(
             ),
             temp_path=temp_path,
         )
+    except FilePersistenceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:
         temp_path.unlink(missing_ok=True)
     return FileUploadResponse(
@@ -207,7 +190,7 @@ async def download_file(
         path,
         filename=record.orig_name,
         media_type=record.mime_type,
-        headers=_content_disposition_headers(record.orig_name, inline=inline),
+        headers=content_disposition_headers(record.orig_name, inline=inline),
     )
 
 

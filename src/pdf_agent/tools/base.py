@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -45,6 +46,10 @@ class BaseTool(abc.ABC):
         """Run the tool and return results."""
         ...
 
+    @cached_property
+    def _cached_name(self) -> str:
+        return self.manifest().name
+
     @property
     def name(self) -> str:
-        return self.manifest().name
+        return self._cached_name

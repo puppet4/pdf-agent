@@ -1,12 +1,23 @@
 import React from 'react';
+import { API_BASE_URL } from '../services/config';
 import { truncateText, formatBytes, fileExtension } from '../utils';
+
+const resolveAssetUrl = (value) => {
+  if (!value) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+  return `${API_BASE_URL}${value}`;
+};
 
 export const FileCard = ({ file, selected, onToggle, onDelete }) => {
   return (
     <div className={`file-card${selected ? " selected" : ""}`}>
       <button className="file-main" onClick={onToggle}>
         {file.thumbnail_url ? (
-          <img className="file-thumb" src={file.thumbnail_url} alt={file.orig_name} />
+          <img className="file-thumb" src={resolveAssetUrl(file.thumbnail_url)} alt={file.orig_name} />
         ) : (
           <div className="file-thumb fallback">{fileExtension(file.orig_name)}</div>
         )}
@@ -16,7 +27,7 @@ export const FileCard = ({ file, selected, onToggle, onDelete }) => {
         </div>
       </button>
       <div className="file-actions">
-        <a href={file.download_url} className="file-link" download>
+        <a href={resolveAssetUrl(file.download_url)} className="file-link" download>
           原件
         </a>
         <button

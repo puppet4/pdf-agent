@@ -11,7 +11,7 @@ from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools._builtins.pdf_to_text import _extract_page_text
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools.filenames import localized_output_name
-from pdf_agent.tools.libreoffice import run_libreoffice_conversion
+from pdf_agent.tools.libreoffice import run_libreoffice_conversion_to_output
 
 
 class PdfToExcelTool(BaseTool):
@@ -40,18 +40,19 @@ class PdfToExcelTool(BaseTool):
         if lo_bin:
             if reporter:
                 reporter(10, "Starting conversion...")
-            success, failure_reason = run_libreoffice_conversion(
+            success, failure_reason = run_libreoffice_conversion_to_output(
                 lo_bin,
                 convert_to="xlsx",
                 input_path=inputs[0],
+                output_path=output_path,
                 outdir=workdir,
                 profile_dir=workdir / ".libreoffice-profile",
             )
-            if success and output_path.exists():
+            if success:
                 engine = "libreoffice"
             else:
                 fallback_used = True
-                fallback_reason = failure_reason or "LibreOffice did not produce a .xlsx file"
+                fallback_reason = failure_reason
         if engine != "libreoffice":
             self._fallback_convert(inputs[0], output_path)
         if reporter:
@@ -111,18 +112,19 @@ class PdfToPptTool(BaseTool):
         if lo_bin:
             if reporter:
                 reporter(10, "Starting conversion...")
-            success, failure_reason = run_libreoffice_conversion(
+            success, failure_reason = run_libreoffice_conversion_to_output(
                 lo_bin,
                 convert_to="pptx",
                 input_path=inputs[0],
+                output_path=output_path,
                 outdir=workdir,
                 profile_dir=workdir / ".libreoffice-profile",
             )
-            if success and output_path.exists():
+            if success:
                 engine = "libreoffice"
             else:
                 fallback_used = True
-                fallback_reason = failure_reason or "LibreOffice did not produce a .pptx file"
+                fallback_reason = failure_reason
         if engine != "libreoffice":
             self._fallback_convert(inputs[0], output_path)
         if reporter:
