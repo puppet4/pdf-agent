@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import hashlib
 import logging
 import shutil
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -27,6 +28,10 @@ class StorageTrimResult:
 class LocalStorage:
     """Manages file storage on local disk."""
 
+    def __init__(self) -> None:
+        self._size_cache_lock = threading.Lock()
+        self._size_cache: dict[str, tuple[float, tuple[bool, int, int], int]] = {}
+
     def save_upload(self, file_id: uuid.UUID, filename: str, content: bytes) -> Path:
         """Save an uploaded file and return its storage path."""
         dest_dir = settings.upload_dir / str(file_id)
@@ -34,6 +39,7 @@ class LocalStorage:
         safe_name = Path(filename).name or "upload.bin"
         dest = dest_dir / safe_name
         dest.write_bytes(content)
+        self.invalidate_size_cache()
         return dest
 
     def save_upload_from_path(self, file_id: uuid.UUID, filename: str, source_path: Path) -> Path:
@@ -43,6 +49,7 @@ class LocalStorage:
         safe_name = Path(filename).name or "upload.bin"
         dest = dest_dir / safe_name
         shutil.copy2(source_path, dest)
+        self.invalidate_size_cache()
         return dest
 
     def get_upload_path(self, file_id: uuid.UUID, filename: str) -> Path:
@@ -74,6 +81,7 @@ class LocalStorage:
         conversation_dir = settings.conversations_dir / conversation_id
         if conversation_dir.exists():
             shutil.rmtree(conversation_dir)
+            self.invalidate_size_cache()
 
     def list_expired_conversations(self) -> list[str]:
         """Return conversation ids whose workdirs are older than the retention window."""
@@ -124,11 +132,25 @@ class LocalStorage:
                     logger.info("Cleaned up expired upload: %s", entry.name)
             except OSError:
                 logger.warning("Failed to clean up upload: %s", entry.name)
+        if removed:
+            self.invalidate_size_cache()
         return removed
 
-    def dir_size_bytes(self, root: Path | None = None) -> int:
+    def _root_signature(self, base: Path) -> tuple[bool, int, int]:
+        if not base.exists():
+            return (False, 0, 0)
+        try:
+            stat = base.stat()
+            child_count = 0
+            if base.is_dir():
+                child_count = sum(1 for _ in base.iterdir())
+            return (True, stat.st_mtime_ns, child_count)
+        except OSError:
+            return (False, 0, 0)
+
+    @staticmethod
+    def _scan_dir_size_bytes(base: Path) -> int:
         total = 0
-        base = root or settings.data_dir
         if not base.exists():
             return 0
         for path in base.rglob("*"):
@@ -138,6 +160,36 @@ class LocalStorage:
                 except OSError:
                     logger.warning("Failed to stat file during size scan: %s", path)
         return total
+
+    def invalidate_size_cache(self, root: Path | None = None) -> None:
+        with self._size_cache_lock:
+            if root is None:
+                self._size_cache.clear()
+                return
+            self._size_cache.pop(str(root.resolve()), None)
+
+    def dir_size_bytes(self, root: Path | None = None, *, force_refresh: bool = False) -> int:
+        base = root or settings.data_dir
+        cache_key = str(base.resolve())
+        ttl = settings.storage_scan_cache_ttl_sec
+        signature = self._root_signature(base)
+        now = time.time()
+
+        with self._size_cache_lock:
+            cached = self._size_cache.get(cache_key)
+            if (
+                not force_refresh
+                and ttl > 0
+                and cached is not None
+                and (now - cached[0]) <= ttl
+                and cached[1] == signature
+            ):
+                return cached[2]
+
+        scanned = self._scan_dir_size_bytes(base)
+        with self._size_cache_lock:
+            self._size_cache[cache_key] = (now, signature, scanned)
+        return scanned
 
     def storage_limit_bytes(self) -> int:
         return settings.max_storage_gb * 1024 * 1024 * 1024
@@ -150,12 +202,12 @@ class LocalStorage:
     ) -> StorageTrimResult:
         """Delete oldest storage dirs first until under the configured storage limit."""
         limit = self.storage_limit_bytes()
-        current = self.dir_size_bytes()
+        current = self.dir_size_bytes(force_refresh=True)
         if current <= limit:
             return StorageTrimResult()
 
         result = StorageTrimResult()
-        candidates: list[tuple[float, str, Path]] = []
+        candidates: list[tuple[float, str, Path, int]] = []
         roots: list[tuple[str, Path]] = []
         if include_conversations:
             roots.append(("conversation", settings.conversations_dir))
@@ -168,18 +220,20 @@ class LocalStorage:
             for entry in root.iterdir():
                 if entry.is_dir():
                     try:
-                        candidates.append((entry.stat().st_mtime, kind, entry))
+                        candidates.append((entry.stat().st_mtime, kind, entry, self._scan_dir_size_bytes(entry)))
                     except OSError:
                         continue
-        for _, kind, entry in sorted(candidates, key=lambda item: item[0]):
+        for _, kind, entry, size_bytes in sorted(candidates, key=lambda item: item[0]):
             shutil.rmtree(entry, ignore_errors=True)
             if kind == "conversation":
                 result.removed_conversation_ids.append(entry.name)
             else:
                 result.removed_upload_ids.append(entry.name)
-            current = self.dir_size_bytes()
+            current = max(0, current - size_bytes)
             if current <= limit:
                 break
+        if result.total_removed:
+            self.invalidate_size_cache()
         return result
 
     def trim_storage_lru(self) -> int:

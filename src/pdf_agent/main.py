@@ -190,8 +190,17 @@ def _setup_sentry():
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting %s ...", settings.app_name)
+    settings.validate_runtime()
     settings.ensure_dirs()
     _setup_sentry()
+    auth_policy = settings.auth_policy
+    logger.info(
+        "Authentication policy: enabled=%s mode=%s env=%s (%s)",
+        auth_policy.enabled,
+        auth_policy.mode,
+        settings.environment,
+        auth_policy.reason,
+    )
 
     if len(registry) == 0:
         load_builtin_tools()

@@ -25,6 +25,7 @@ class _Metrics:
         self.tool_duration: dict[str, tuple[int, float]] = {} # tool_name -> (count, total)
         self.conversation_run_count: dict[str, int] = {}
         self.conversation_duration: dict[str, tuple[int, float]] = {}
+        self.conversation_state_load_count: dict[str, int] = {}
         self.llm_tokens_in: int = 0
         self.llm_tokens_out: int = 0
 
@@ -48,6 +49,11 @@ class _Metrics:
             if duration is not None:
                 count, total = self.conversation_duration.get(status, (0, 0.0))
                 self.conversation_duration[status] = (count + 1, total + duration)
+
+    def record_conversation_state_load(self, *, source: str, status: str):
+        key = f"{source}:{status}"
+        with self._lock:
+            self.conversation_state_load_count[key] = self.conversation_state_load_count.get(key, 0) + 1
 
     def record_llm_tokens(self, input_tokens: int, output_tokens: int):
         with self._lock:
@@ -101,6 +107,17 @@ class _Metrics:
         for status, (count, total) in sorted(self.conversation_duration.items()):
             lines.append(f'pdf_agent_conversation_run_duration_seconds_sum{{status="{status}"}} {total:.4f}')
             lines.append(f'pdf_agent_conversation_run_duration_seconds_count{{status="{status}"}} {count}')
+
+        lines.append("# HELP pdf_agent_conversation_state_loads_total Conversation state load results")
+        lines.append("# TYPE pdf_agent_conversation_state_loads_total counter")
+        for key, count in sorted(self.conversation_state_load_count.items()):
+            try:
+                source, status = key.split(":", 1)
+            except ValueError:
+                continue
+            lines.append(
+                f'pdf_agent_conversation_state_loads_total{{source="{source}",status="{status}"}} {count}'
+            )
 
         # LLM tokens
         lines.append("# HELP pdf_agent_llm_tokens_total Total LLM tokens")

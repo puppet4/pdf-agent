@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import json
 import logging
 import queue
@@ -27,6 +28,8 @@ from pdf_agent.api.http import content_disposition_headers
 from pdf_agent.api.metrics import metrics
 from pdf_agent.external_commands import cancel_conversation_processes
 from pdf_agent.services import FileService
+from pdf_agent.services.conversation_history import append_history_message, load_history_messages
+from pdf_agent.services.idempotency import build_request_hash, idempotency_service, normalize_idempotency_key
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +44,17 @@ _SENSITIVE_ARG_RE = re.compile(r"(password|secret|token|api[_-]?key|authorizatio
 _HEARTBEAT_INTERVAL = 5.0
 _DEFAULT_CONVERSATION_TITLE = "新会话"
 _MAX_CONVERSATION_TITLE_LENGTH = 48
+_CONVERSATION_STATS_CACHE_FILE = ".conversation_stats.json"
 
 _content_disposition_headers = content_disposition_headers
+
+
+@dataclass(frozen=True)
+class ConversationMessagesLoadResult:
+    messages: list[dict]
+    source: str
+    status: str
+    warning: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -354,16 +366,64 @@ def _write_conversation_title(conversation_dir: Path, title: str) -> None:
         logger.warning("Failed to persist conversation title to %s", title_path, exc_info=True)
 
 
-def _count_artifacts(conversation_dir: Path) -> int:
-    total = 0
+def _conversation_stats_cache_path(conversation_dir: Path) -> Path:
+    return conversation_dir / _CONVERSATION_STATS_CACHE_FILE
+
+
+def _scan_conversation_stats(conversation_dir: Path) -> tuple[int, int]:
+    step_count = 0
+    artifact_count = 0
     for step_dir in conversation_dir.iterdir():
         try:
             if not step_dir.is_dir() or not step_dir.name.startswith("step_"):
                 continue
         except OSError:
             continue
-        total += sum(1 for candidate in step_dir.rglob("*") if _is_user_visible_artifact(candidate, step_dir))
-    return total
+        step_count += 1
+        artifact_count += sum(1 for candidate in step_dir.rglob("*") if _is_user_visible_artifact(candidate, step_dir))
+    return step_count, artifact_count
+
+
+def _load_conversation_stats(conversation_dir: Path) -> tuple[int, int]:
+    stats_file = _conversation_stats_cache_path(conversation_dir)
+    now = time.time()
+    conversation_mtime_ns = 0
+    try:
+        conversation_mtime_ns = conversation_dir.stat().st_mtime_ns
+    except OSError:
+        return (0, 0)
+
+    if settings.conversation_stats_cache_ttl_sec > 0 and stats_file.exists():
+        try:
+            payload = json.loads(stats_file.read_text(encoding="utf-8"))
+            if (
+                isinstance(payload, dict)
+                and payload.get("conversation_mtime_ns") == conversation_mtime_ns
+                and isinstance(payload.get("cached_at"), (int, float))
+                and (now - float(payload["cached_at"])) <= settings.conversation_stats_cache_ttl_sec
+            ):
+                step_count = int(payload.get("step_count") or 0)
+                artifact_count = int(payload.get("artifact_count") or 0)
+                return (step_count, artifact_count)
+        except (OSError, ValueError, json.JSONDecodeError):
+            logger.debug("Conversation stats cache read failed for %s", conversation_dir, exc_info=True)
+
+    step_count, artifact_count = _scan_conversation_stats(conversation_dir)
+    payload = {
+        "conversation_mtime_ns": conversation_mtime_ns,
+        "cached_at": now,
+        "step_count": step_count,
+        "artifact_count": artifact_count,
+    }
+    try:
+        stats_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        logger.debug("Conversation stats cache write failed for %s", conversation_dir, exc_info=True)
+    return step_count, artifact_count
+
+
+def _count_artifacts(conversation_dir: Path) -> int:
+    return _load_conversation_stats(conversation_dir)[1]
 
 
 def _is_user_visible_artifact(candidate: Path, step_dir: Path) -> bool:
@@ -377,19 +437,33 @@ def _is_user_visible_artifact(candidate: Path, step_dir: Path) -> bool:
     return all(part and not part.startswith(".") for part in rel.parts)
 
 
-async def _load_conversation_messages(conversation_id: str, request: Request) -> list[dict]:
+def _is_state_backend_error(exc: Exception) -> bool:
+    if isinstance(exc, (ConnectionError, OSError, TimeoutError, asyncio.TimeoutError)):
+        return True
+    lowered = f"{type(exc).__name__}: {exc}".lower()
+    markers = (
+        "checkpoint",
+        "checkpointer",
+        "postgres",
+        "connection",
+        "network",
+        "timeout",
+        "database",
+        "closed pool",
+        "unavailable",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+async def _load_conversation_messages_from_graph(conversation_id: str, request: Request) -> list[dict]:
     """Load persisted conversation messages from LangGraph state."""
     graph = request.app.state.graph
     messages: list[dict] = []
     if graph is None:
-        return messages
+        raise RuntimeError("graph unavailable")
 
     config = {"configurable": {"thread_id": conversation_id}}
-    try:
-        state = await graph.aget_state(config)
-    except Exception:
-        logger.warning("Failed to load conversation state for %s", conversation_id, exc_info=True)
-        raise HTTPException(status_code=503, detail="Conversation state unavailable")
+    state = await graph.aget_state(config)
 
     if state and state.values:
         pending_output_files: list[str] = []
@@ -429,16 +503,61 @@ async def _load_conversation_messages(conversation_id: str, request: Request) ->
     return messages
 
 
+async def _load_conversation_messages(
+    conversation_id: str,
+    request: Request,
+    *,
+    conversation_dir: Path,
+) -> ConversationMessagesLoadResult:
+    if request.app.state.graph is None:
+        fallback_messages = load_history_messages(conversation_dir)
+        warning = "Conversation state backend is unavailable; returned local history only"
+        metrics.record_conversation_state_load(source="history", status="degraded")
+        return ConversationMessagesLoadResult(
+            messages=fallback_messages,
+            source="history",
+            status="degraded",
+            warning=warning,
+        )
+
+    try:
+        messages = await _load_conversation_messages_from_graph(conversation_id, request)
+        metrics.record_conversation_state_load(source="checkpointer", status="ok")
+        return ConversationMessagesLoadResult(
+            messages=messages,
+            source="checkpointer",
+            status="ok",
+        )
+    except Exception as exc:
+        if not settings.degrade_on_state_backend_failure or not _is_state_backend_error(exc):
+            raise
+        logger.warning(
+            "Conversation state backend unavailable for %s; fallback to local history",
+            conversation_id,
+            exc_info=True,
+        )
+        fallback_messages = load_history_messages(conversation_dir)
+        warning = "Conversation state backend unavailable; returned degraded history"
+        metrics.record_conversation_state_load(source="history", status="degraded")
+        return ConversationMessagesLoadResult(
+            messages=fallback_messages,
+            source="history",
+            status="degraded",
+            warning=warning,
+        )
+
+
 def _serialize_conversation(conversation_dir: Path) -> dict:
     stat = conversation_dir.stat()
+    step_count, artifact_count = _load_conversation_stats(conversation_dir)
     return {
         "id": conversation_dir.name,
         "conversation_id": conversation_dir.name,
         "title": _read_conversation_title(conversation_dir),
         "created_at": stat.st_ctime,
         "updated_at": stat.st_mtime,
-        "artifact_count": _count_artifacts(conversation_dir),
-        "step_count": sum(1 for d in conversation_dir.iterdir() if d.is_dir() and d.name.startswith("step_")),
+        "artifact_count": artifact_count,
+        "step_count": step_count,
     }
 
 
@@ -520,7 +639,18 @@ async def get_conversation(conversation_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     payload = _serialize_conversation(conversation_dir)
-    payload["messages"] = await _load_conversation_messages(conversation_id, request)
+    state_result = await _load_conversation_messages(
+        conversation_id,
+        request,
+        conversation_dir=conversation_dir,
+    )
+    payload["messages"] = state_result.messages
+    payload["state"] = {
+        "source": state_result.source,
+        "status": state_result.status,
+    }
+    if state_result.warning:
+        payload["state"]["warning"] = state_result.warning
     return payload
 
 
@@ -578,6 +708,13 @@ async def download_conversation_artifact(
     raise HTTPException(status_code=404, detail=f"Artifact '{artifact_path}' not found")
 
 
+def _idempotency_replay_stream(payload: dict[str, object]):
+    async def _stream():
+        yield _sse_event("idempotency_replay", payload)
+        yield _sse_event("done", {})
+    return _stream
+
+
 @router.post("/api/conversations/{conversation_id}/messages")
 async def create_message(conversation_id: str, req: MessageCreateRequest, request: Request):
     """Stream a conversation turn with the LangGraph agent via SSE."""
@@ -586,6 +723,59 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
         raise HTTPException(status_code=503, detail="Agent not initialized")
 
     conversation_id = _validate_conversation_id(conversation_id, status_code=422)
+    idempotency_key_header = request.headers.get("Idempotency-Key")
+    try:
+        idempotency_key = normalize_idempotency_key(idempotency_key_header)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    idempotency_record_id = None
+    if idempotency_key:
+        try:
+            decision = await idempotency_service.acquire(
+                scope=f"conversation_message:{conversation_id}",
+                key=idempotency_key,
+                request_hash=build_request_hash(
+                    {
+                        "conversation_id": conversation_id,
+                        "message": req.message,
+                        "file_ids": req.file_ids,
+                        "artifact_paths": req.artifact_paths,
+                    }
+                ),
+            )
+            if decision.action == "conflict":
+                raise HTTPException(status_code=409, detail=decision.message or "Idempotency key conflict")
+            if decision.action == "in_progress":
+                detail: dict[str, object] = {
+                    "detail": "A request with the same Idempotency-Key is already in progress",
+                }
+                if decision.response_payload:
+                    detail["existing"] = decision.response_payload
+                raise HTTPException(status_code=409, detail=detail)
+            if decision.action == "replay":
+                replay_payload = decision.response_payload or {"conversation_id": conversation_id, "status": "REPLAYED"}
+                return StreamingResponse(
+                    _idempotency_replay_stream(replay_payload)(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                        "X-Idempotency-Replayed": "true",
+                    },
+                )
+            idempotency_record_id = decision.record_id
+        except HTTPException:
+            raise
+        except Exception:
+            logger.warning(
+                "Idempotency backend unavailable for conversation message; request continues without dedupe",
+                exc_info=True,
+            )
+            idempotency_record_id = None
+            idempotency_key = None
+
     conversation_run_id = f"{conversation_id}:{uuid.uuid4().hex}"
 
     # Resolve uploaded files
@@ -613,6 +803,13 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
     if normalized_intent_hints:
         human_message_kwargs["normalized_intent_hints"] = normalized_intent_hints
 
+    append_history_message(
+        conversation_dir=conversation_workdir,
+        msg_type="human",
+        content=req.message,
+        attachments=selected_input_summaries or None,
+    )
+
     input_state = _build_message_input_state(
         message=req.message,
         human_message_kwargs=human_message_kwargs,
@@ -623,6 +820,19 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
     )
 
     config = {"configurable": {"thread_id": conversation_id}}
+
+    if idempotency_record_id is not None:
+        try:
+            await idempotency_service.mark_processing(
+                record_id=idempotency_record_id,
+                response_payload={
+                    "conversation_id": conversation_id,
+                    "conversation_run_id": conversation_run_id,
+                    "status": "PROCESSING",
+                },
+            )
+        except Exception:
+            logger.warning("Failed to persist idempotency processing state for %s", conversation_run_id, exc_info=True)
 
     async def event_stream():
         yield _sse_event("conversation", {"conversation_id": conversation_id})
@@ -635,6 +845,9 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
         started_at = time.perf_counter()
         last_heartbeat_at = started_at
         run_status = "SUCCESS"
+        assistant_chunks: list[str] = []
+        assistant_artifacts: list[str] = []
+        stream_error_message = ""
 
         def drain_progress_updates() -> list[dict[str, object]]:
             updates: list[dict[str, object]] = []
@@ -676,7 +889,9 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                 if kind == "on_chat_model_stream":
                     chunk = event["data"]["chunk"]
                     if chunk.content:
-                        yield _sse_event("token", {"content": chunk.content})
+                        text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+                        assistant_chunks.append(text)
+                        yield _sse_event("token", {"content": text})
 
                 elif kind == "on_tool_start":
                     current_tool_name = str(event.get("name") or "tool")
@@ -701,8 +916,10 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                     parsed = parse_tool_result_payload(output) if isinstance(output, str) else None
                     file_paths = parsed.output_files if parsed else _extract_output_files(output)
                     if file_paths:
+                        artifact_urls = _paths_to_download_urls(conversation_id, file_paths)
+                        assistant_artifacts.extend(artifact_urls)
                         yield _sse_event("artifact", {
-                            "files": _paths_to_download_urls(conversation_id, file_paths),
+                            "files": artifact_urls,
                         })
                     tool_name = str(event.get("name") or current_tool_name or "tool")
                     yield _sse_event("tool_end", _tool_client_summary(tool_name, parsed))
@@ -721,6 +938,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
             raise
         except Exception as e:
             run_status = "ERROR"
+            stream_error_message = _format_agent_stream_error(e)
             terminated = cancel_conversation_processes(conversation_run_id)
             if terminated:
                 logger.info(
@@ -729,24 +947,82 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                     conversation_run_id,
                 )
             logger.exception("Agent stream error")
-            yield _sse_event("error", {"message": _format_agent_stream_error(e)})
+            yield _sse_event("error", {"message": stream_error_message})
         finally:
             metrics.record_conversation_run(
                 status=run_status,
                 duration=time.perf_counter() - started_at,
             )
+            deduped_artifacts = list(dict.fromkeys(assistant_artifacts))
+            if run_status == "SUCCESS":
+                assistant_text = "".join(assistant_chunks).strip()
+                if assistant_text or deduped_artifacts:
+                    append_history_message(
+                        conversation_dir=conversation_workdir,
+                        msg_type="ai",
+                        content=assistant_text,
+                        files=deduped_artifacts or None,
+                    )
+            elif run_status == "ERROR":
+                append_history_message(
+                    conversation_dir=conversation_workdir,
+                    msg_type="system",
+                    content=stream_error_message or "处理失败，请查看后端日志",
+                    meta={"status": "ERROR"},
+                )
+            elif run_status == "CANCELLED":
+                append_history_message(
+                    conversation_dir=conversation_workdir,
+                    msg_type="system",
+                    content="请求已取消",
+                    meta={"status": "CANCELLED"},
+                )
+
+            if idempotency_record_id is not None:
+                try:
+                    if run_status == "SUCCESS":
+                        await idempotency_service.mark_succeeded(
+                            record_id=idempotency_record_id,
+                            response_code=200,
+                            response_payload={
+                                "conversation_id": conversation_id,
+                                "conversation_run_id": conversation_run_id,
+                                "status": run_status,
+                                "artifacts": deduped_artifacts,
+                            },
+                        )
+                    else:
+                        await idempotency_service.mark_failed(
+                            record_id=idempotency_record_id,
+                            response_code=409 if run_status == "CANCELLED" else 500,
+                            error_message=stream_error_message or run_status,
+                            response_payload={
+                                "conversation_id": conversation_id,
+                                "conversation_run_id": conversation_run_id,
+                                "status": run_status,
+                            },
+                        )
+                except Exception:
+                    logger.warning(
+                        "Failed to persist idempotency final state for run %s",
+                        conversation_run_id,
+                        exc_info=True,
+                    )
             release_progress_queue(conversation_run_id)
 
         yield _sse_event("done", {})
 
+    response_headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    if idempotency_key:
+        response_headers["X-Idempotency-Key"] = idempotency_key
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers=response_headers,
     )
 
 

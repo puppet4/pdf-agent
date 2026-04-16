@@ -233,17 +233,32 @@ def test_rate_limit_state_fail_opens_when_json_file_is_corrupted(tmp_path, monke
 
 
 @pytest.mark.asyncio
-async def test_load_conversation_messages_returns_503_for_state_access_failures():
+async def test_load_conversation_messages_falls_back_to_local_history_for_state_access_failures(tmp_path: Path):
+    conversation_dir = tmp_path / "conversation-1"
+    conversation_dir.mkdir(parents=True, exist_ok=True)
+    (conversation_dir / ".history.jsonl").write_text(
+        '{"type":"human","content":"hello"}\n{"type":"ai","content":"done"}\n',
+        encoding="utf-8",
+    )
+
     class _FailingGraph:
         async def aget_state(self, _config):
             raise RuntimeError("checkpoint backend unavailable")
 
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(graph=_FailingGraph())))
+    result = await _load_conversation_messages(
+        "conversation-1",
+        request,
+        conversation_dir=conversation_dir,
+    )
 
-    with pytest.raises(HTTPException) as exc_info:
-        await _load_conversation_messages("conversation-1", request)
-
-    assert exc_info.value.status_code == 503
+    assert result.status == "degraded"
+    assert result.source == "history"
+    assert result.warning is not None
+    assert result.messages == [
+        {"type": "human", "content": "hello"},
+        {"type": "ai", "content": "done"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -258,7 +273,11 @@ async def test_load_conversation_messages_does_not_mask_programming_errors():
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(graph=_BadGraph())))
 
     with pytest.raises(AttributeError):
-        await _load_conversation_messages("conversation-1", request)
+        await _load_conversation_messages(
+            "conversation-1",
+            request,
+            conversation_dir=Path("/tmp/conversation"),
+        )
 
 
 @pytest.mark.asyncio
@@ -341,10 +360,12 @@ def test_metrics_keep_conversation_duration_separate_from_tool_duration():
 
     metrics.record_tool("merge", 1.5)
     metrics.record_conversation_run(status="SUCCESS", duration=3.0)
+    metrics.record_conversation_state_load(source="history", status="degraded")
     body = metrics.exposition()
 
     assert 'pdf_agent_tool_duration_seconds_sum{tool="merge"} 1.5000' in body
     assert 'pdf_agent_conversation_run_duration_seconds_sum{status="SUCCESS"} 3.0000' in body
+    assert 'pdf_agent_conversation_state_loads_total{source="history",status="degraded"} 1' in body
     assert 'tool="duration:SUCCESS"' not in body
 
 

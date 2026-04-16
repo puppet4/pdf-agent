@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import time
@@ -93,24 +94,26 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
-_AUTH_EXEMPT_PATHS = {"/healthz"}
-
-
 class ApiKeyMiddleware(BaseHTTPMiddleware):
-    """Require X-API-Key header when api_key is configured."""
+    """Require API key headers according to configured auth policy."""
 
     async def dispatch(self, request: Request, call_next):
-        if not settings.api_key:
+        policy = settings.auth_policy
+        if not policy.enabled:
             return await call_next(request)
 
-        if request.url.path in _AUTH_EXEMPT_PATHS:
+        if request.url.path in settings.auth_exempt_path_set:
             return await call_next(request)
 
-        provided = request.headers.get("X-API-Key")
-        if provided != settings.api_key:
+        provided = request.headers.get(settings.api_key_header_name)
+        expected = policy.api_key or ""
+        if not provided or not hmac.compare_digest(provided, expected):
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Invalid or missing API key"},
+                content={
+                    "detail": "Invalid or missing API key",
+                    "hint": f"Provide {settings.api_key_header_name} header",
+                },
             )
 
         return await call_next(request)
