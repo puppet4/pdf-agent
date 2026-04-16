@@ -78,7 +78,8 @@ class TestCoreSurfaceSmoke:
             "/api/executions",
             headers={settings.api_key_header_name: settings.auth_policy.api_key or ""},
         )
-        assert executions_response.status_code == 410
+        assert executions_response.status_code == 200
+        assert executions_response.headers.get("X-Legacy-Phase") in {"deprecation", "warning"}
         assert executions_response.headers.get("X-Replacement-Endpoint") == "/api/conversations?page=1&limit=20"
 
     def test_models_and_migration_include_documented_core_entities(self):

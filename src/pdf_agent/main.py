@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from psycopg_pool import AsyncConnectionPool
 from sqlalchemy import select
 
-from pdf_agent.config import settings
+from pdf_agent.config import settings, validate_settings
 from pdf_agent.core import PDFAgentError
 from pdf_agent.api.router import api_router
 from pdf_agent.api.middleware import (
@@ -129,6 +129,23 @@ async def _cleanup_trimmed_storage(app: FastAPI, removed_conversation_ids: list[
     return removed_uploads, removed_checkpoints
 
 
+async def _reconcile_idempotency_drift() -> tuple[int, int]:
+    from pdf_agent.services.idempotency import idempotency_service
+    from pdf_agent.api.metrics import metrics
+
+    try:
+        stats = await idempotency_service.reconcile_file_upload_processing()
+        if stats.fixed_success:
+            metrics.record_idempotency_event(scope="file_upload", action="reconciled_success")
+        if stats.fixed_failed:
+            metrics.record_idempotency_event(scope="file_upload", action="reconciled_failed")
+        return stats.fixed_success, stats.fixed_failed
+    except Exception:
+        logger.warning("Idempotency reconciliation skipped because backend is unavailable", exc_info=True)
+        metrics.record_degradation(path="system", reason="idempotency_reconcile_backend_unavailable")
+        return (0, 0)
+
+
 async def _cleanup_loop(app: FastAPI):
     """Periodically clean up expired uploads, stale conversation state, and storage pressure."""
     from pdf_agent.storage import storage
@@ -155,6 +172,13 @@ async def _cleanup_loop(app: FastAPI):
                     trim_result.total_removed,
                     trimmed_uploads,
                     trimmed_checkpoints,
+                )
+            reconciled_success, reconciled_failed = await _reconcile_idempotency_drift()
+            if reconciled_success or reconciled_failed:
+                logger.warning(
+                    "Idempotency reconciliation fixed success=%d failed=%d stale records",
+                    reconciled_success,
+                    reconciled_failed,
                 )
         except Exception:
             logger.exception("Cleanup failed")
@@ -190,7 +214,7 @@ def _setup_sentry():
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting %s ...", settings.app_name)
-    settings.validate_runtime()
+    validate_settings()
     settings.ensure_dirs()
     _setup_sentry()
     auth_policy = settings.auth_policy
@@ -289,6 +313,14 @@ async def lifespan(app: FastAPI):
         trimmed_uploads = await _cleanup_upload_records(trim_result.removed_upload_ids)
         if trimmed_uploads:
             logger.info("Startup cleanup: removed %d LRU-trimmed upload record(s)", trimmed_uploads)
+
+    reconciled_success, reconciled_failed = await _reconcile_idempotency_drift()
+    if reconciled_success or reconciled_failed:
+        logger.warning(
+            "Startup idempotency reconciliation fixed success=%d failed=%d stale records",
+            reconciled_success,
+            reconciled_failed,
+        )
 
     # Start background cleanup task
     cleanup_task = asyncio.create_task(_cleanup_loop(app))

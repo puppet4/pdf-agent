@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import secrets
 from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings
 
-_DEFAULT_DEV_API_KEY = "dev-local-api-key"
+_UNSET_API_KEY = "__PDF_AGENT_API_KEY_UNSET__"
+_EPHEMERAL_NON_PROD_API_KEY = secrets.token_urlsafe(48)
 _WEAK_API_KEYS = {
     "",
+    _UNSET_API_KEY,
     "changeme",
     "change-me",
     "change-me-in-production",
-    _DEFAULT_DEV_API_KEY,
+    "dev-local-api-key",
+    "test-api-key",
+    "password",
+    "123456",
 }
 
 
@@ -60,9 +66,10 @@ class Settings(BaseSettings):
 
     # --- Access Control ---
     auth_mode: Literal["required", "optional", "disabled"] = "required"
-    api_key: str = _DEFAULT_DEV_API_KEY
+    api_key: str = _UNSET_API_KEY
     api_key_header_name: str = "X-API-Key"
     exempt_auth_paths: str = "/healthz"
+    min_api_key_length: int = 24
 
     # --- CORS ---
     cors_origins: str = "*"  # comma-separated allowed origins
@@ -88,6 +95,7 @@ class Settings(BaseSettings):
 
     # --- Compatibility ---
     legacy_api_compatibility_mode: Literal["disabled", "bridge"] = "bridge"
+    legacy_api_phase: Literal["deprecation", "warning", "sunset"] = "deprecation"
     legacy_api_sunset_date: str = "2026-12-31"
     legacy_api_migration_url: str = "/docs/migrations/legacy-api"
 
@@ -124,7 +132,8 @@ class Settings(BaseSettings):
     def auth_policy(self) -> AuthPolicy:
         mode = self.auth_mode
         env = self.environment
-        key = (self.api_key or "").strip()
+        raw_key = (self.api_key or "").strip()
+        key = "" if raw_key == _UNSET_API_KEY else raw_key
 
         if mode == "disabled":
             if env == "production":
@@ -132,39 +141,61 @@ class Settings(BaseSettings):
             return AuthPolicy(enabled=False, mode=mode, api_key=None, reason="auth disabled by config")
 
         if mode == "optional":
-            if env == "production" and not key:
-                raise ValueError("Production requires PDF_AGENT_API_KEY when auth_mode=optional")
+            if env == "production":
+                raise ValueError("PDF_AGENT_AUTH_MODE=optional is not allowed in production")
             if key:
-                if env == "production" and key.lower() in _WEAK_API_KEYS:
-                    raise ValueError("Production API key is weak/default; set a strong PDF_AGENT_API_KEY")
+                if key.lower() in _WEAK_API_KEYS:
+                    raise ValueError("API key is weak/default; set a strong PDF_AGENT_API_KEY")
+                if len(key) < self.min_api_key_length:
+                    raise ValueError(
+                        f"API key is too short; requires at least {self.min_api_key_length} characters"
+                    )
                 return AuthPolicy(enabled=True, mode=mode, api_key=key, reason="optional mode with configured key")
             return AuthPolicy(enabled=False, mode=mode, api_key=None, reason="optional mode without API key")
 
         if not key:
+            if env == "production":
+                raise ValueError("Production requires PDF_AGENT_API_KEY when auth_mode=required")
             if env in {"development", "test"}:
                 return AuthPolicy(
                     enabled=True,
                     mode=mode,
-                    api_key=_DEFAULT_DEV_API_KEY,
-                    reason="required mode with development fallback API key",
+                    api_key=_EPHEMERAL_NON_PROD_API_KEY,
+                    reason="required mode with ephemeral non-production API key",
                 )
             raise ValueError("PDF_AGENT_API_KEY must be non-empty when auth_mode=required")
-        if env == "production" and key.lower() in _WEAK_API_KEYS:
-            raise ValueError("Production API key is weak/default; set a strong PDF_AGENT_API_KEY")
+        if key.lower() in _WEAK_API_KEYS:
+            raise ValueError("API key is weak/default; set a strong PDF_AGENT_API_KEY")
+        if len(key) < self.min_api_key_length:
+            raise ValueError(f"API key is too short; requires at least {self.min_api_key_length} characters")
         return AuthPolicy(enabled=True, mode=mode, api_key=key, reason="required mode")
 
     def validate_runtime(self) -> None:
         _ = self.auth_policy
+        if self.environment not in {"development", "test", "production"}:
+            raise ValueError("PDF_AGENT_ENVIRONMENT must be one of: development, test, production")
+        if self.api_key_header_name.strip() == "":
+            raise ValueError("PDF_AGENT_API_KEY_HEADER_NAME must be non-empty")
+        if self.min_api_key_length < 16:
+            raise ValueError("PDF_AGENT_MIN_API_KEY_LENGTH must be >= 16")
         if self.idempotency_ttl_hours <= 0:
             raise ValueError("PDF_AGENT_IDEMPOTENCY_TTL_HOURS must be > 0")
         if self.idempotency_processing_timeout_sec <= 0:
             raise ValueError("PDF_AGENT_IDEMPOTENCY_PROCESSING_TIMEOUT_SEC must be > 0")
         if self.idempotency_max_key_length < 16:
             raise ValueError("PDF_AGENT_IDEMPOTENCY_MAX_KEY_LENGTH must be >= 16")
+        if self.idempotency_processing_timeout_sec > self.idempotency_ttl_hours * 3600:
+            raise ValueError(
+                "PDF_AGENT_IDEMPOTENCY_PROCESSING_TIMEOUT_SEC must be less than idempotency ttl window"
+            )
         if self.storage_scan_cache_ttl_sec < 0:
             raise ValueError("PDF_AGENT_STORAGE_SCAN_CACHE_TTL_SEC must be >= 0")
         if self.conversation_stats_cache_ttl_sec < 0:
             raise ValueError("PDF_AGENT_CONVERSATION_STATS_CACHE_TTL_SEC must be >= 0")
+        if self.legacy_api_compatibility_mode == "disabled" and self.legacy_api_phase != "sunset":
+            raise ValueError(
+                "When PDF_AGENT_LEGACY_API_COMPATIBILITY_MODE=disabled, phase must be sunset"
+            )
 
     def ensure_dirs(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
@@ -172,3 +203,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validate_settings() -> None:
+    settings.validate_runtime()

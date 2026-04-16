@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pdf_agent.services.idempotency import build_request_hash, normalize_idempotency_key
+from pdf_agent.services.idempotency import build_request_hash, hash_idempotency_key, normalize_idempotency_key
 
 
 def test_build_request_hash_is_stable_across_dict_key_order():
@@ -25,3 +25,7 @@ def test_normalize_idempotency_key_trims_blank_values_to_none():
     assert normalize_idempotency_key("   ") is None
     assert normalize_idempotency_key(None) is None
     assert normalize_idempotency_key("  key-1  ") == "key-1"
+
+
+def test_hash_idempotency_key_normalizes_input():
+    assert hash_idempotency_key("key-1") == hash_idempotency_key("  key-1  ")

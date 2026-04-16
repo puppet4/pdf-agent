@@ -26,6 +26,8 @@ class _Metrics:
         self.conversation_run_count: dict[str, int] = {}
         self.conversation_duration: dict[str, tuple[int, float]] = {}
         self.conversation_state_load_count: dict[str, int] = {}
+        self.degradation_count: dict[str, int] = {}
+        self.idempotency_event_count: dict[str, int] = {}
         self.llm_tokens_in: int = 0
         self.llm_tokens_out: int = 0
 
@@ -54,6 +56,16 @@ class _Metrics:
         key = f"{source}:{status}"
         with self._lock:
             self.conversation_state_load_count[key] = self.conversation_state_load_count.get(key, 0) + 1
+
+    def record_degradation(self, *, path: str, reason: str):
+        key = f"{path}:{reason}"
+        with self._lock:
+            self.degradation_count[key] = self.degradation_count.get(key, 0) + 1
+
+    def record_idempotency_event(self, *, scope: str, action: str):
+        key = f"{scope}:{action}"
+        with self._lock:
+            self.idempotency_event_count[key] = self.idempotency_event_count.get(key, 0) + 1
 
     def record_llm_tokens(self, input_tokens: int, output_tokens: int):
         with self._lock:
@@ -117,6 +129,28 @@ class _Metrics:
                 continue
             lines.append(
                 f'pdf_agent_conversation_state_loads_total{{source="{source}",status="{status}"}} {count}'
+            )
+
+        lines.append("# HELP pdf_agent_degradation_events_total Total degraded execution paths")
+        lines.append("# TYPE pdf_agent_degradation_events_total counter")
+        for key, count in sorted(self.degradation_count.items()):
+            try:
+                path, reason = key.split(":", 1)
+            except ValueError:
+                continue
+            lines.append(
+                f'pdf_agent_degradation_events_total{{path="{path}",reason="{reason}"}} {count}'
+            )
+
+        lines.append("# HELP pdf_agent_idempotency_events_total Idempotency state transitions")
+        lines.append("# TYPE pdf_agent_idempotency_events_total counter")
+        for key, count in sorted(self.idempotency_event_count.items()):
+            try:
+                scope, action = key.split(":", 1)
+            except ValueError:
+                continue
+            lines.append(
+                f'pdf_agent_idempotency_events_total{{scope="{scope}",action="{action}"}} {count}'
             )
 
         # LLM tokens

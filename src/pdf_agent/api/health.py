@@ -45,6 +45,7 @@ async def healthz(request: Request):
         "environment": settings.environment,
     }
     checks["legacy_api_compatibility_mode"] = settings.legacy_api_compatibility_mode
+    checks["legacy_api_phase"] = settings.legacy_api_phase
 
     # Tool count
     from pdf_agent.tools.registry import registry
