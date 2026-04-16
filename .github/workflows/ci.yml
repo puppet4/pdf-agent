@@ -99,7 +99,7 @@ jobs:
 
           # Health + metrics
           curl -sf http://127.0.0.1:8765/healthz | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['database']=='ok', f'DB check failed: {d}'"
-          curl -sf http://127.0.0.1:8765/metrics | grep -q pdf_agent_http_requests_total
+          curl -sf -H "$AUTH_HEADER" http://127.0.0.1:8765/metrics | grep -q pdf_agent_http_requests_total
 
           # E2E: upload -> list -> download -> delete
           FILE_ID=$(curl -sf -H "$AUTH_HEADER" -F 'file=@tests/fixtures/minimal.pdf;type=application/pdf' http://127.0.0.1:8765/api/files | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
