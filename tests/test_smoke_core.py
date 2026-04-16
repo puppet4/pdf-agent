@@ -21,9 +21,9 @@ class TestCoreSurfaceSmoke:
         assert "/api/conversations/{conversation_id}" in paths
         assert "/api/conversations/{conversation_id}/messages" in paths
         assert "/api/conversations/{conversation_id}/artifacts" in paths
-        assert "/api/tools" not in paths
-        assert "/api/executions" not in paths
-        assert "/api/workflows" not in paths
+        assert "/api/tools" in paths
+        assert "/api/executions" in paths
+        assert "/api/workflows" in paths
         assert "/" not in paths
 
     def test_healthz_returns_structured_payload(self):
@@ -52,16 +52,34 @@ class TestCoreSurfaceSmoke:
         assert app.redoc_url is None
         assert app.openapi_url is None
 
-    def test_legacy_http_routes_are_removed_from_router(self):
+    def test_legacy_http_routes_are_bridged_with_deprecation(self):
         from pdf_agent.api.router import build_api_router
 
         paths = {route.path for route in build_api_router().routes if hasattr(route, "path")}
 
-        assert "/api/tools" not in paths
-        assert "/api/executions" not in paths
-        assert "/api/workflows" not in paths
+        assert "/api/tools" in paths
+        assert "/api/executions" in paths
+        assert "/api/workflows" in paths
         assert "/api/conversations" in paths
         assert "/api/conversations/{conversation_id}/messages" in paths
+
+        from pdf_agent.main import app
+        from pdf_agent.config import settings
+
+        client = TestClient(app)
+        tools_response = client.get(
+            "/api/tools",
+            headers={settings.api_key_header_name: settings.auth_policy.api_key or ""},
+        )
+        assert tools_response.status_code == 200
+        assert tools_response.headers.get("Deprecation") == "true"
+
+        executions_response = client.get(
+            "/api/executions",
+            headers={settings.api_key_header_name: settings.auth_policy.api_key or ""},
+        )
+        assert executions_response.status_code == 410
+        assert executions_response.headers.get("X-Replacement-Endpoint") == "/api/conversations?page=1&limit=20"
 
     def test_models_and_migration_include_documented_core_entities(self):
         from pdf_agent.db import models
@@ -101,4 +119,3 @@ class TestCoreSurfaceSmoke:
         assert parse_page_range("1,1", total_pages=5) == [0]
         assert parse_page_range("1-2,2", total_pages=5) == [0, 1]
         assert parse_page_range("last-2-last", total_pages=5) == [2, 3, 4]
-

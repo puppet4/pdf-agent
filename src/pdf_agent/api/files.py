@@ -8,7 +8,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from sqlalchemy import select
@@ -22,6 +22,8 @@ from pdf_agent.db.models import FileRecord
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.file import FileUploadResponse
 from pdf_agent.services import FilePersistenceError, FileService, load_storage_record
+from pdf_agent.services.idempotency import build_request_hash, idempotency_service, normalize_idempotency_key
+from pdf_agent.storage import storage
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 logger = logging.getLogger(__name__)
@@ -107,25 +109,117 @@ async def _list_files_impl(page: int, limit: int, session: AsyncSession) -> dict
 )
 async def upload_file(
     file: UploadFile,
+    request: Request,
+    response: Response,
     session: AsyncSession = Depends(get_session),
 ) -> FileUploadResponse:
     """Upload a file (PDF, image, Office doc, etc.)."""
     svc = FileService(session)
-    temp_path = await _spill_upload_to_tempfile(file)
+    normalized_content_type = _normalize_upload_content_type(
+        file.filename or "unknown",
+        file.content_type,
+    )
+    idempotency_key_header = request.headers.get("Idempotency-Key")
     try:
+        idempotency_key = normalize_idempotency_key(idempotency_key_header)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    temp_path = await _spill_upload_to_tempfile(file)
+    idempotency_record_id = None
+
+    async def _safe_mark_processing(payload: dict[str, object]) -> None:
+        if idempotency_record_id is None:
+            return
+        try:
+            await idempotency_service.mark_processing(
+                record_id=idempotency_record_id,
+                response_payload=payload,
+            )
+        except Exception:
+            logger.warning("Failed to persist idempotency processing state", exc_info=True)
+
+    async def _safe_mark_failed(status_code: int, message: str) -> None:
+        if idempotency_record_id is None:
+            return
+        try:
+            await idempotency_service.mark_failed(
+                record_id=idempotency_record_id,
+                response_code=status_code,
+                error_message=message,
+            )
+        except Exception:
+            logger.warning("Failed to persist idempotency failure state", exc_info=True)
+
+    async def _safe_mark_succeeded(payload: dict[str, object]) -> None:
+        if idempotency_record_id is None:
+            return
+        try:
+            await idempotency_service.mark_succeeded(
+                record_id=idempotency_record_id,
+                response_code=200,
+                response_payload=payload,
+            )
+        except Exception:
+            logger.warning("Failed to persist idempotency success state", exc_info=True)
+
+    try:
+        if idempotency_key:
+            try:
+                request_hash = build_request_hash(
+                    {
+                        "filename": file.filename or "unknown",
+                        "content_type": normalized_content_type,
+                        "size_bytes": temp_path.stat().st_size,
+                        "sha256": storage.compute_sha256_file(temp_path),
+                    }
+                )
+                decision = await idempotency_service.acquire(
+                    scope="file_upload",
+                    key=idempotency_key,
+                    request_hash=request_hash,
+                )
+                if decision.action == "conflict":
+                    raise HTTPException(status_code=409, detail=decision.message or "Idempotency key conflict")
+                if decision.action == "in_progress":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="A request with the same Idempotency-Key is already in progress",
+                    )
+                if decision.action == "replay":
+                    payload = decision.response_payload or {}
+                    response.headers["X-Idempotency-Replayed"] = "true"
+                    return FileUploadResponse.model_validate(payload)
+                idempotency_record_id = decision.record_id
+            except HTTPException:
+                raise
+            except Exception:
+                logger.warning(
+                    "Idempotency backend unavailable for file upload; request continues without dedupe",
+                    exc_info=True,
+                )
+                idempotency_record_id = None
+                idempotency_key = None
+
+        await _safe_mark_processing({"status": "PROCESSING"})
         record = await svc.upload_from_path(
             filename=file.filename or "unknown",
-            content_type=_normalize_upload_content_type(
-                file.filename or "unknown",
-                file.content_type,
-            ),
+            content_type=normalized_content_type,
             temp_path=temp_path,
         )
     except FilePersistenceError as exc:
+        await _safe_mark_failed(500, str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except HTTPException as exc:
+        if exc.status_code >= 400:
+            await _safe_mark_failed(exc.status_code, str(exc.detail))
+        raise
+    except Exception as exc:
+        await _safe_mark_failed(500, str(exc))
+        raise
     finally:
         temp_path.unlink(missing_ok=True)
-    return FileUploadResponse(
+    result = FileUploadResponse(
         id=record.id,
         orig_name=record.orig_name,
         mime_type=record.mime_type,
@@ -133,6 +227,10 @@ async def upload_file(
         page_count=record.page_count,
         created_at=record.created_at,
     )
+    if idempotency_record_id is not None:
+        await _safe_mark_succeeded(result.model_dump(mode="json"))
+        response.headers["X-Idempotency-Key"] = idempotency_key or ""
+    return result
 
 
 @router.delete(
