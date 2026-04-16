@@ -25,6 +25,7 @@ from pdf_agent.config import settings
 from pdf_agent.db import async_session_factory
 from pdf_agent.api.http import content_disposition_headers
 from pdf_agent.api.metrics import metrics
+from pdf_agent.external_commands import cancel_conversation_processes
 from pdf_agent.services import FileService
 
 logger = logging.getLogger(__name__)
@@ -171,6 +172,7 @@ def _build_message_input_state(
     human_message_kwargs: dict[str, object],
     conversation_workdir: Path,
     conversation_id: str,
+    conversation_run_id: str,
     selected_inputs: list[FileInfo],
 ) -> dict:
     selected_paths = [f["path"] for f in selected_inputs]
@@ -182,7 +184,7 @@ def _build_message_input_state(
             )
         ],
         "conversation_workdir": str(conversation_workdir),
-        "configurable": {"thread_id": conversation_id},
+        "configurable": {"thread_id": conversation_id, "run_id": conversation_run_id},
     }
     if selected_inputs:
         input_state["files"] = selected_inputs
@@ -584,6 +586,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
         raise HTTPException(status_code=503, detail="Agent not initialized")
 
     conversation_id = _validate_conversation_id(conversation_id, status_code=422)
+    conversation_run_id = f"{conversation_id}:{uuid.uuid4().hex}"
 
     # Resolve uploaded files
     uploaded_files = await _resolve_uploaded_files(req.file_ids)
@@ -615,6 +618,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
         human_message_kwargs=human_message_kwargs,
         conversation_workdir=conversation_workdir,
         conversation_id=conversation_id,
+        conversation_run_id=conversation_run_id,
         selected_inputs=selected_inputs,
     )
 
@@ -625,7 +629,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
 
         # Import progress queue helpers
         from pdf_agent.agent.tools_adapter import get_progress_queue, release_progress_queue
-        progress_queue = get_progress_queue(conversation_id)
+        progress_queue = get_progress_queue(conversation_run_id)
         stream_iter = graph.astream_events(input_state, config=config, version="v2").__aiter__()
         current_tool_name = ""
         started_at = time.perf_counter()
@@ -707,9 +711,23 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
 
         except asyncio.CancelledError:
             run_status = "CANCELLED"
+            terminated = cancel_conversation_processes(conversation_run_id)
+            if terminated:
+                logger.info(
+                    "Cancelled %d subprocess(es) for conversation run %s",
+                    terminated,
+                    conversation_run_id,
+                )
             raise
         except Exception as e:
             run_status = "ERROR"
+            terminated = cancel_conversation_processes(conversation_run_id)
+            if terminated:
+                logger.info(
+                    "Stopped %d subprocess(es) after stream error for run %s",
+                    terminated,
+                    conversation_run_id,
+                )
             logger.exception("Agent stream error")
             yield _sse_event("error", {"message": _format_agent_stream_error(e)})
         finally:
@@ -717,7 +735,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                 status=run_status,
                 duration=time.perf_counter() - started_at,
             )
-            release_progress_queue(conversation_id)
+            release_progress_queue(conversation_run_id)
 
         yield _sse_event("done", {})
 

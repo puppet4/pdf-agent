@@ -1,18 +1,27 @@
 """Regression coverage for runtime integrity and observability fixes."""
 from __future__ import annotations
 
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+import queue
 import threading
 from types import SimpleNamespace
+import uuid
 
 import pytest
 from fastapi import HTTPException
 
 from pdf_agent.agent import tools_adapter
+from pdf_agent.api.files import delete_file
 from pdf_agent.api.agent import _load_conversation_messages
 from pdf_agent.api.middleware import _load_rate_limit_state
 from pdf_agent.api.metrics import _Metrics
+from pdf_agent.db.models import FileRecord
+from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.services import FilePersistenceError, FileService
 from pdf_agent.storage import StorageTrimResult
+from pdf_agent.tools.base import BaseTool, ToolResult
 from pdf_agent.tools._builtins.redact import RedactTool
 
 
@@ -32,6 +41,61 @@ class _FailingCommitSession:
 
     async def rollback(self) -> None:
         self.rolled_back = True
+
+
+class _NoopTool(BaseTool):
+    def manifest(self) -> ToolManifest:
+        return ToolManifest(
+            name="noop",
+            label="No-op",
+            category="test",
+            description="No-op tool for adapter tests",
+            inputs=ToolInputSpec(min=1, max=1),
+            outputs=ToolOutputSpec(type="pdf"),
+            params=[],
+            async_hint=False,
+        )
+
+    def validate(self, params: dict) -> dict:
+        return params
+
+    def run(self, inputs: list[Path], params: dict, workdir: Path, reporter=None) -> ToolResult:
+        if reporter is not None:
+            reporter(42, "processing")
+        return ToolResult(output_files=[inputs[0]], meta={"ok": True}, log="done")
+
+
+class _ScalarResult:
+    def __init__(self, record):
+        self._record = record
+
+    def scalar_one_or_none(self):
+        return self._record
+
+
+class _DeleteSession:
+    def __init__(self, record):
+        self.record = record
+        self.deleted = []
+        self.committed = False
+        self.rolled_back = False
+
+    async def execute(self, _query):
+        return _ScalarResult(self.record)
+
+    async def delete(self, record):
+        self.deleted.append(record)
+
+    async def commit(self):
+        self.committed = True
+
+    async def rollback(self):
+        self.rolled_back = True
+
+
+class _FailingDeleteSession(_DeleteSession):
+    async def execute(self, _query):
+        raise RuntimeError("database unavailable")
 
 
 @pytest.mark.asyncio
@@ -106,6 +170,59 @@ def test_async_tool_semaphore_is_safe_to_initialize_inside_worker_threads(monkey
     assert holder["semaphore"] is tools_adapter._ASYNC_SEMAPHORE
 
 
+@pytest.mark.asyncio
+async def test_execute_tool_uses_run_id_for_progress_and_process_tracking(
+    tmp_path: Path,
+    sample_pdf: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    tool = _NoopTool()
+    captured: dict[str, str | None] = {"queue_key": None, "bound_run_id": None}
+    progress_updates: queue.Queue = queue.Queue()
+
+    def _fake_get_progress_queue(run_id: str) -> queue.Queue:
+        captured["queue_key"] = run_id
+        return progress_updates
+
+    @contextmanager
+    def _fake_bind(run_id: str | None):
+        captured["bound_run_id"] = run_id
+        yield
+
+    monkeypatch.setattr(tools_adapter, "get_progress_queue", _fake_get_progress_queue)
+    monkeypatch.setattr(tools_adapter, "bind_conversation_run_context", _fake_bind)
+
+    state = {
+        "files": [
+            {
+                "file_id": "1",
+                "path": str(sample_pdf),
+                "orig_name": sample_pdf.name,
+                "mime_type": "application/pdf",
+                "page_count": 5,
+                "source": "upload",
+            }
+        ],
+        "current_files": [str(sample_pdf)],
+        "conversation_workdir": str(tmp_path / "conversation"),
+        "step_counter": 0,
+        "configurable": {"thread_id": "conversation-1", "run_id": "conversation-1:run-a"},
+    }
+
+    result = await tools_adapter._execute_tool_with_state(
+        tool=tool,
+        manifest=tool.manifest(),
+        state=state,
+        kwargs={},
+    )
+
+    assert result.log == "done"
+    assert captured["queue_key"] == "conversation-1:run-a"
+    assert captured["bound_run_id"] == "conversation-1:run-a"
+    update = progress_updates.get_nowait()
+    assert update == {"percent": 42, "message": "processing"}
+
+
 def test_rate_limit_state_fail_opens_when_json_file_is_corrupted(tmp_path, monkeypatch: pytest.MonkeyPatch):
     from pdf_agent.config import settings
 
@@ -142,6 +259,81 @@ async def test_load_conversation_messages_does_not_mask_programming_errors():
 
     with pytest.raises(AttributeError):
         await _load_conversation_messages("conversation-1", request)
+
+
+@pytest.mark.asyncio
+async def test_delete_file_returns_500_when_storage_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    file_id = uuid.uuid4()
+    file_dir = tmp_path / str(file_id)
+    file_dir.mkdir(parents=True, exist_ok=True)
+    storage_path = file_dir / "sample.pdf"
+    storage_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    record = FileRecord(
+        id=file_id,
+        orig_name="sample.pdf",
+        mime_type="application/pdf",
+        size_bytes=storage_path.stat().st_size,
+        sha256=None,
+        page_count=1,
+        storage_path=str(storage_path),
+        created_at=datetime.now(timezone.utc),
+    )
+    session = _DeleteSession(record)
+
+    async def _fake_get(self, _: uuid.UUID):
+        return record
+
+    def _raise_oserror(*args, **kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("pdf_agent.api.files.FileService.get", _fake_get)
+    monkeypatch.setattr("pdf_agent.api.files.shutil.rmtree", _raise_oserror)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await delete_file(file_id=file_id, session=session)
+
+    assert exc_info.value.status_code == 500
+    assert "Failed to remove file storage" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_delete_file_returns_warning_when_db_delete_fails_but_storage_removed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    file_id = uuid.uuid4()
+    file_dir = tmp_path / str(file_id)
+    file_dir.mkdir(parents=True, exist_ok=True)
+    storage_path = file_dir / "sample.pdf"
+    storage_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    record = FileRecord(
+        id=file_id,
+        orig_name="sample.pdf",
+        mime_type="application/pdf",
+        size_bytes=storage_path.stat().st_size,
+        sha256=None,
+        page_count=1,
+        storage_path=str(storage_path),
+        created_at=datetime.now(timezone.utc),
+    )
+    session = _FailingDeleteSession(record)
+
+    async def _fake_get(self, _: uuid.UUID):
+        return record
+
+    monkeypatch.setattr("pdf_agent.api.files.FileService.get", _fake_get)
+
+    result = await delete_file(file_id=file_id, session=session)
+
+    assert result["deleted"] is True
+    assert result["warning"] == "File metadata could not be removed from database"
+    assert session.rolled_back is True
+    assert not file_dir.exists()
 
 
 def test_metrics_keep_conversation_duration_separate_from_tool_duration():

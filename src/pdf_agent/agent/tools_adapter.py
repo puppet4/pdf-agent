@@ -22,7 +22,7 @@ from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, PDFAgentError
 from pdf_agent.external_commands import bind_conversation_run_context
 from pdf_agent.schemas.tool import ParamSpec, ToolManifest
-from pdf_agent.tools.base import BaseTool
+from pdf_agent.tools.base import BaseTool, ToolResult
 from pdf_agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -123,24 +123,24 @@ def _allowed_state_paths(state: AgentState) -> set[Path]:
 
 
 # ---------------------------------------------------------------------------
-# SSE progress queue — keyed by conversation_id at the app layer
+# SSE progress queue — keyed by conversation-run id at the app layer
 # ---------------------------------------------------------------------------
 
-# Maps conversation_id -> queue of (percent, message) progress updates
+# Maps conversation_run_id -> queue of (percent, message) progress updates
 _progress_queues: dict[str, queue.Queue] = {}
 _progress_lock = threading.Lock()
 
 
-def get_progress_queue(conversation_id: str) -> queue.Queue:
+def get_progress_queue(conversation_run_id: str) -> queue.Queue:
     with _progress_lock:
-        if conversation_id not in _progress_queues:
-            _progress_queues[conversation_id] = queue.Queue(maxsize=100)
-        return _progress_queues[conversation_id]
+        if conversation_run_id not in _progress_queues:
+            _progress_queues[conversation_run_id] = queue.Queue(maxsize=100)
+        return _progress_queues[conversation_run_id]
 
 
-def release_progress_queue(conversation_id: str):
+def release_progress_queue(conversation_run_id: str):
     with _progress_lock:
-        _progress_queues.pop(conversation_id, None)
+        _progress_queues.pop(conversation_run_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -245,8 +245,11 @@ async def _execute_tool_with_state(
             params[p.name] = p.default
     validated_params = tool.validate(params)
 
-    conversation_id = state.get("configurable", {}).get("thread_id", "") if isinstance(state, dict) else ""
-    prog_queue: queue.Queue | None = get_progress_queue(conversation_id) if conversation_id else None
+    configurable = state.get("configurable", {}) if isinstance(state, dict) else {}
+    thread_id = configurable.get("thread_id", "") if isinstance(configurable, dict) else ""
+    run_id = configurable.get("run_id", "") if isinstance(configurable, dict) else ""
+    conversation_run_id = str(run_id or thread_id or "")
+    prog_queue: queue.Queue | None = get_progress_queue(conversation_run_id) if conversation_run_id else None
 
     def reporter(percent: int, message: str = "") -> None:
         if prog_queue:
@@ -259,7 +262,7 @@ async def _execute_tool_with_state(
 
     start = time.perf_counter()
     try:
-        with bind_conversation_run_context(conversation_id or None):
+        with bind_conversation_run_context(conversation_run_id or None):
             if manifest.async_hint:
                 def _run_async_tool() -> ToolResult:
                     semaphore = _get_semaphore()
@@ -416,7 +419,7 @@ async def invoke_adapted_tool(
         "current_files": [str(path) for path in resolved_paths],
         "conversation_workdir": str(conversation_workdir),
         "step_counter": step_counter,
-        "configurable": {"thread_id": conversation_id},
+        "configurable": {"thread_id": conversation_id, "run_id": conversation_id},
     }
     result_str = await lc_tool.coroutine(
         state=state,
