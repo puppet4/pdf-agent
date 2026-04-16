@@ -71,6 +71,7 @@ jobs:
         run: |
           uvicorn pdf_agent.main:app --host 127.0.0.1 --port 8765 &
           SERVER_PID=$!
+          trap 'kill $SERVER_PID >/dev/null 2>&1 || true' EXIT
           # Wait for server to be ready (up to 30s)
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8765/healthz > /dev/null 2>&1; then
@@ -80,23 +81,28 @@ jobs:
             sleep 1
           done
 
-          # Health + tools count
+          # Health + metrics
           curl -sf http://127.0.0.1:8765/healthz | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['database']=='ok', f'DB check failed: {d}'"
-          curl -sf http://127.0.0.1:8765/api/tools | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d['tools'])>=44, f'Expected 44+ tools, got {len(d[\"tools\"])}'"
-          curl -sf http://127.0.0.1:8765/api/workflows | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d['workflows'])>=5, 'Expected 5+ workflows'"
-          curl -sf http://127.0.0.1:8765/metrics | grep -q pdf_agent_http
+          curl -sf http://127.0.0.1:8765/metrics | grep -q pdf_agent_http_requests_total
 
-          # E2E: upload → rotate → download
+          # E2E: upload -> list -> download -> delete
           FILE_ID=$(curl -sf -F 'file=@tests/fixtures/minimal.pdf;type=application/pdf' http://127.0.0.1:8765/api/files | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
           echo "Uploaded file: $FILE_ID"
-          RESULT=$(curl -sf -X POST http://127.0.0.1:8765/api/tools/rotate/run \
-            -H 'Content-Type: application/json' \
-            -d "{\"file_ids\":[\"$FILE_ID\"],\"params\":{\"angle\":\"90\"}}")
-          DL_URL=$(echo $RESULT | python3 -c "import sys,json; print(json.load(sys.stdin)['output_files'][0]['download_url'])")
+          curl -sf "http://127.0.0.1:8765/api/files?page=1&limit=20" | python3 -c "import sys,json; d=json.load(sys.stdin); ids={item['id'] for item in d['files']}; fid='$FILE_ID'; assert fid in ids, f'Uploaded file missing in list: {fid}'"
+          DL_URL="/api/files/$FILE_ID/download"
           echo "Download URL: $DL_URL"
           curl -sf http://127.0.0.1:8765$DL_URL -o /tmp/rotated.pdf
           python3 -c "data=open('/tmp/rotated.pdf','rb').read(); assert data[:4]==b'%PDF', 'Not a valid PDF'"
-          echo "E2E rotate test passed"
+          curl -sf -X DELETE "http://127.0.0.1:8765/api/files/$FILE_ID" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['deleted'] is True and d['id']== '$FILE_ID'"
+          echo "Files API smoke test passed"
+
+          # E2E: conversations create -> list -> get -> delete
+          CONV_ID=$(curl -sf -X POST http://127.0.0.1:8765/api/conversations | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'])")
+          echo "Created conversation: $CONV_ID"
+          curl -sf "http://127.0.0.1:8765/api/conversations?page=1&limit=20" | python3 -c "import sys,json; d=json.load(sys.stdin); ids={item['id'] for item in d['conversations']}; cid='$CONV_ID'; assert cid in ids, f'Conversation missing in list: {cid}'"
+          curl -sf "http://127.0.0.1:8765/api/conversations/$CONV_ID" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['id']=='$CONV_ID'; assert isinstance(d.get('messages'), list)"
+          curl -sf -X DELETE "http://127.0.0.1:8765/api/conversations/$CONV_ID" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['deleted'] is True and d['id']=='$CONV_ID'"
+          echo "Conversations API smoke test passed"
 
           kill $SERVER_PID
           echo "All smoke tests passed"
