@@ -17,12 +17,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pdf_agent.config import settings
 from pdf_agent.core import ErrorCode, PDFAgentError
 from pdf_agent.api.http import content_disposition_headers
+from pdf_agent.api.metrics import metrics
 from pdf_agent.db import get_session
 from pdf_agent.db.models import FileRecord
 from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.file import FileUploadResponse
 from pdf_agent.services import FilePersistenceError, FileService, load_storage_record
-from pdf_agent.services.idempotency import build_request_hash, idempotency_service, normalize_idempotency_key
+from pdf_agent.services.idempotency import (
+    build_request_hash,
+    hash_idempotency_key,
+    idempotency_service,
+    normalize_idempotency_key,
+)
 from pdf_agent.storage import storage
 
 router = APIRouter(prefix="/api/files", tags=["files"])
@@ -127,6 +133,8 @@ async def upload_file(
 
     temp_path = await _spill_upload_to_tempfile(file)
     idempotency_record_id = None
+    idempotency_scope = "file_upload"
+    idempotency_key_hash: str | None = None
 
     async def _safe_mark_processing(payload: dict[str, object]) -> None:
         if idempotency_record_id is None:
@@ -136,6 +144,7 @@ async def upload_file(
                 record_id=idempotency_record_id,
                 response_payload=payload,
             )
+            metrics.record_idempotency_event(scope=idempotency_scope, action="processing")
         except Exception:
             logger.warning("Failed to persist idempotency processing state", exc_info=True)
 
@@ -148,6 +157,7 @@ async def upload_file(
                 response_code=status_code,
                 error_message=message,
             )
+            metrics.record_idempotency_event(scope=idempotency_scope, action="failed")
         except Exception:
             logger.warning("Failed to persist idempotency failure state", exc_info=True)
 
@@ -160,6 +170,7 @@ async def upload_file(
                 response_code=200,
                 response_payload=payload,
             )
+            metrics.record_idempotency_event(scope=idempotency_scope, action="succeeded")
         except Exception:
             logger.warning("Failed to persist idempotency success state", exc_info=True)
 
@@ -175,37 +186,44 @@ async def upload_file(
                     }
                 )
                 decision = await idempotency_service.acquire(
-                    scope="file_upload",
+                    scope=idempotency_scope,
                     key=idempotency_key,
                     request_hash=request_hash,
                 )
                 if decision.action == "conflict":
+                    metrics.record_idempotency_event(scope=idempotency_scope, action="conflict")
                     raise HTTPException(status_code=409, detail=decision.message or "Idempotency key conflict")
                 if decision.action == "in_progress":
+                    metrics.record_idempotency_event(scope=idempotency_scope, action="in_progress")
                     raise HTTPException(
                         status_code=409,
                         detail="A request with the same Idempotency-Key is already in progress",
                     )
                 if decision.action == "replay":
+                    metrics.record_idempotency_event(scope=idempotency_scope, action="replay")
                     payload = decision.response_payload or {}
                     response.headers["X-Idempotency-Replayed"] = "true"
                     return FileUploadResponse.model_validate(payload)
                 idempotency_record_id = decision.record_id
+                idempotency_key_hash = hash_idempotency_key(idempotency_key)
             except HTTPException:
                 raise
             except Exception:
                 logger.warning(
-                    "Idempotency backend unavailable for file upload; request continues without dedupe",
+                    "degradation path=/api/files reason=idempotency_backend_unavailable action=upload",
                     exc_info=True,
                 )
+                metrics.record_degradation(path="/api/files", reason="idempotency_backend_unavailable")
                 idempotency_record_id = None
                 idempotency_key = None
+                idempotency_key_hash = None
 
         await _safe_mark_processing({"status": "PROCESSING"})
         record = await svc.upload_from_path(
             filename=file.filename or "unknown",
             content_type=normalized_content_type,
             temp_path=temp_path,
+            idempotency_key_hash=idempotency_key_hash,
         )
     except FilePersistenceError as exc:
         await _safe_mark_failed(500, str(exc))

@@ -513,6 +513,7 @@ async def _load_conversation_messages(
         fallback_messages = load_history_messages(conversation_dir)
         warning = "Conversation state backend is unavailable; returned local history only"
         metrics.record_conversation_state_load(source="history", status="degraded")
+        metrics.record_degradation(path="/api/conversations/{conversation_id}", reason="graph_uninitialized")
         return ConversationMessagesLoadResult(
             messages=fallback_messages,
             source="history",
@@ -532,13 +533,14 @@ async def _load_conversation_messages(
         if not settings.degrade_on_state_backend_failure or not _is_state_backend_error(exc):
             raise
         logger.warning(
-            "Conversation state backend unavailable for %s; fallback to local history",
+            "degradation path=/api/conversations/{conversation_id} reason=state_backend_unavailable conversation_id=%s",
             conversation_id,
             exc_info=True,
         )
         fallback_messages = load_history_messages(conversation_dir)
         warning = "Conversation state backend unavailable; returned degraded history"
         metrics.record_conversation_state_load(source="history", status="degraded")
+        metrics.record_degradation(path="/api/conversations/{conversation_id}", reason="state_backend_unavailable")
         return ConversationMessagesLoadResult(
             messages=fallback_messages,
             source="history",
@@ -730,6 +732,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     idempotency_record_id = None
+    idempotency_scope = "conversation_message"
     if idempotency_key:
         try:
             decision = await idempotency_service.acquire(
@@ -745,8 +748,10 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                 ),
             )
             if decision.action == "conflict":
+                metrics.record_idempotency_event(scope=idempotency_scope, action="conflict")
                 raise HTTPException(status_code=409, detail=decision.message or "Idempotency key conflict")
             if decision.action == "in_progress":
+                metrics.record_idempotency_event(scope=idempotency_scope, action="in_progress")
                 detail: dict[str, object] = {
                     "detail": "A request with the same Idempotency-Key is already in progress",
                 }
@@ -754,6 +759,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                     detail["existing"] = decision.response_payload
                 raise HTTPException(status_code=409, detail=detail)
             if decision.action == "replay":
+                metrics.record_idempotency_event(scope=idempotency_scope, action="replay")
                 replay_payload = decision.response_payload or {"conversation_id": conversation_id, "status": "REPLAYED"}
                 return StreamingResponse(
                     _idempotency_replay_stream(replay_payload)(),
@@ -770,8 +776,13 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
             raise
         except Exception:
             logger.warning(
-                "Idempotency backend unavailable for conversation message; request continues without dedupe",
+                "degradation path=/api/conversations/{conversation_id}/messages reason=idempotency_backend_unavailable conversation_id=%s",
+                conversation_id,
                 exc_info=True,
+            )
+            metrics.record_degradation(
+                path="/api/conversations/{conversation_id}/messages",
+                reason="idempotency_backend_unavailable",
             )
             idempotency_record_id = None
             idempotency_key = None
@@ -831,6 +842,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                     "status": "PROCESSING",
                 },
             )
+            metrics.record_idempotency_event(scope=idempotency_scope, action="processing")
         except Exception:
             logger.warning("Failed to persist idempotency processing state for %s", conversation_run_id, exc_info=True)
 
@@ -991,6 +1003,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                                 "artifacts": deduped_artifacts,
                             },
                         )
+                        metrics.record_idempotency_event(scope=idempotency_scope, action="succeeded")
                     else:
                         await idempotency_service.mark_failed(
                             record_id=idempotency_record_id,
@@ -1002,6 +1015,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                                 "status": run_status,
                             },
                         )
+                        metrics.record_idempotency_event(scope=idempotency_scope, action="failed")
                 except Exception:
                     logger.warning(
                         "Failed to persist idempotency final state for run %s",

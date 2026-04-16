@@ -21,11 +21,15 @@ class FileRecord(Base):
     mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    idempotency_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (Index("ix_files_sha256", "sha256"),)
+    __table_args__ = (
+        Index("ix_files_sha256", "sha256"),
+        Index("ix_files_idempotency_key_hash", "idempotency_key_hash"),
+    )
 
 
 class IdempotencyRecord(Base):

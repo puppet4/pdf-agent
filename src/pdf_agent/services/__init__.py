@@ -163,6 +163,7 @@ def _build_storage_record(file_id: uuid.UUID, path: Path) -> FileRecord:
         mime_type=mime_type,
         size_bytes=stat.st_size,
         sha256=None,
+        idempotency_key_hash=None,
         page_count=_load_page_count(path, mime_type),
         storage_path=str(path),
         created_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
@@ -229,7 +230,14 @@ class FileService:
         finally:
             temp_path.unlink(missing_ok=True)
 
-    async def upload_from_path(self, filename: str, content_type: str, temp_path: Path) -> FileRecord:
+    async def upload_from_path(
+        self,
+        filename: str,
+        content_type: str,
+        temp_path: Path,
+        *,
+        idempotency_key_hash: str | None = None,
+    ) -> FileRecord:
         trim_result = storage.trim_storage_lru_details(include_conversations=False, include_uploads=True)
         if trim_result.removed_upload_ids:
             try:
@@ -293,6 +301,7 @@ class FileService:
             mime_type=content_type,
             size_bytes=size_bytes,
             sha256=sha256,
+            idempotency_key_hash=idempotency_key_hash,
             page_count=page_count,
             storage_path=str(path),
             created_at=datetime.now(timezone.utc),

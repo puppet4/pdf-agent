@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from pdf_agent.config import settings
 from pdf_agent.db import async_session_factory
-from pdf_agent.db.models import IdempotencyRecord
+from pdf_agent.db.models import FileRecord, IdempotencyRecord
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,13 @@ class IdempotencyDecision:
     response_code: int | None = None
     response_payload: dict[str, Any] | None = None
     message: str | None = None
+
+
+@dataclass(frozen=True)
+class IdempotencyReconcileStats:
+    fixed_success: int = 0
+    fixed_failed: int = 0
+    skipped_recent: int = 0
 
 
 def normalize_idempotency_key(raw_value: str | None) -> str | None:
@@ -52,6 +59,13 @@ def build_request_hash(payload: dict[str, Any]) -> str:
 
 def _hash_key(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def hash_idempotency_key(key: str) -> str:
+    normalized = normalize_idempotency_key(key)
+    if normalized is None:
+        raise ValueError("Idempotency key must be non-empty")
+    return _hash_key(normalized)
 
 
 def _utcnow() -> datetime:
@@ -161,6 +175,63 @@ class IdempotencyService:
                 response_payload=_parse_response_payload(existing.response_body),
                 message="A request with the same idempotency key is already in progress",
             )
+
+    async def reconcile_file_upload_processing(self) -> IdempotencyReconcileStats:
+        """Fix stale PROCESSING idempotency records using persisted file metadata as source of truth."""
+        now = _utcnow()
+        stale_timeout = timedelta(seconds=settings.idempotency_processing_timeout_sec)
+        fixed_success = 0
+        fixed_failed = 0
+        skipped_recent = 0
+
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(IdempotencyRecord).where(
+                    IdempotencyRecord.scope == "file_upload",
+                    IdempotencyRecord.status == STATUS_PROCESSING,
+                )
+            )
+            rows = list(result.scalars().all())
+            for row in rows:
+                file_result = await session.execute(
+                    select(FileRecord)
+                    .where(FileRecord.idempotency_key_hash == row.key_hash)
+                    .order_by(FileRecord.created_at.desc())
+                )
+                record = file_result.scalars().first()
+                if record is not None:
+                    payload = {
+                        "id": str(record.id),
+                        "orig_name": record.orig_name,
+                        "mime_type": record.mime_type,
+                        "size_bytes": record.size_bytes,
+                        "page_count": record.page_count,
+                        "created_at": record.created_at.isoformat() if record.created_at else None,
+                    }
+                    row.status = STATUS_SUCCEEDED
+                    row.response_code = 200
+                    row.response_body = json.dumps(payload, ensure_ascii=False, default=str)
+                    row.error_message = None
+                    row.updated_at = now
+                    fixed_success += 1
+                    continue
+
+                if row.updated_at and (now - row.updated_at) <= stale_timeout:
+                    skipped_recent += 1
+                    continue
+
+                row.status = STATUS_FAILED
+                row.response_code = 408
+                row.error_message = "Idempotency request timed out before completion"
+                row.updated_at = now
+                fixed_failed += 1
+            await session.commit()
+
+        return IdempotencyReconcileStats(
+            fixed_success=fixed_success,
+            fixed_failed=fixed_failed,
+            skipped_recent=skipped_recent,
+        )
 
     async def mark_processing(
         self,
