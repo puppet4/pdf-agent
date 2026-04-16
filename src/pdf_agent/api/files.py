@@ -151,6 +151,7 @@ async def delete_file(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     file_dir = Path(record.storage_path).parent
     persisted = False
+    metadata_delete_failed = False
     try:
         result = await session.execute(select(FileRecord).where(FileRecord.id == file_id))
         persisted_record = result.scalar_one_or_none()
@@ -160,15 +161,21 @@ async def delete_file(
             persisted = True
     except Exception:
         await session.rollback()
+        metadata_delete_failed = True
         logger.warning("Failed to delete DB record for %s; removing storage only", file_id, exc_info=True)
     if file_dir.exists():
         try:
             shutil.rmtree(file_dir, ignore_errors=False)
         except OSError:
             logger.warning("Failed to remove upload directory for %s", file_id, exc_info=True)
+    if file_dir.exists():
+        raise HTTPException(status_code=500, detail="Failed to remove file storage")
     if not persisted and load_storage_record(file_id) is not None:
         raise HTTPException(status_code=500, detail="Failed to remove file storage")
-    return {"deleted": True, "id": str(file_id)}
+    response: dict[str, object] = {"deleted": True, "id": str(file_id)}
+    if metadata_delete_failed:
+        response["warning"] = "File metadata could not be removed from database"
+    return response
 
 
 @router.get(

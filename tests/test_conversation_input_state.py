@@ -9,12 +9,13 @@ def test_build_message_input_state_preserves_current_files_when_no_new_selection
         human_message_kwargs={},
         conversation_workdir=Path("/tmp/conversation"),
         conversation_id="conversation-1",
+        conversation_run_id="conversation-1:run-1",
         selected_inputs=[],
     )
 
     assert "files" not in state
     assert "current_files" not in state
-    assert state["configurable"] == {"thread_id": "conversation-1"}
+    assert state["configurable"] == {"thread_id": "conversation-1", "run_id": "conversation-1:run-1"}
 
 
 def test_build_message_input_state_overrides_current_files_when_selection_exists():
@@ -34,6 +35,7 @@ def test_build_message_input_state_overrides_current_files_when_selection_exists
         human_message_kwargs={},
         conversation_workdir=Path("/tmp/conversation"),
         conversation_id="conversation-1",
+        conversation_run_id="conversation-1:run-1",
         selected_inputs=selected_inputs,
     )
 
