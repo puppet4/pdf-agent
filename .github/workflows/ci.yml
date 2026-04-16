@@ -51,18 +51,29 @@ jobs:
           PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent
           PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@localhost:5432/pdf_agent
           PDF_AGENT_OPENAI_API_KEY: sk-placeholder
-          PDF_AGENT_API_KEY: ci-smoke-key
+          PDF_AGENT_ENVIRONMENT: test
+          PDF_AGENT_API_KEY: ci-smoke-key-ci-smoke-key
         run: |
           find . -name '*.pyc' -delete
           find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
           alembic upgrade head
+
+      - name: Verify migration rollback loop
+        env:
+          PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent
+          PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@localhost:5432/pdf_agent
+          PDF_AGENT_OPENAI_API_KEY: sk-placeholder
+          PDF_AGENT_ENVIRONMENT: test
+          PDF_AGENT_API_KEY: ci-smoke-key-ci-smoke-key
+        run: bash scripts/verify_migrations.sh
 
       - name: Run tests
         env:
           PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent
           PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@localhost:5432/pdf_agent
           PDF_AGENT_OPENAI_API_KEY: sk-placeholder
-          PDF_AGENT_API_KEY: ci-smoke-key
+          PDF_AGENT_ENVIRONMENT: test
+          PDF_AGENT_API_KEY: ci-smoke-key-ci-smoke-key
         run: python -m pytest tests/ -v --tb=short
 
       - name: Smoke test (API endpoints)
@@ -70,12 +81,13 @@ jobs:
           PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent
           PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@localhost:5432/pdf_agent
           PDF_AGENT_OPENAI_API_KEY: sk-placeholder
-          PDF_AGENT_API_KEY: ci-smoke-key
+          PDF_AGENT_ENVIRONMENT: test
+          PDF_AGENT_API_KEY: ci-smoke-key-ci-smoke-key
         run: |
           uvicorn pdf_agent.main:app --host 127.0.0.1 --port 8765 &
           SERVER_PID=$!
           trap 'kill $SERVER_PID >/dev/null 2>&1 || true' EXIT
-          AUTH_HEADER="X-API-Key: ci-smoke-key"
+          AUTH_HEADER="X-API-Key: ci-smoke-key-ci-smoke-key"
           # Wait for server to be ready (up to 30s)
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8765/healthz > /dev/null 2>&1; then
