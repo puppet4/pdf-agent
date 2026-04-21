@@ -8,10 +8,12 @@ class ParamSpec(BaseModel):
     """A single parameter definition in the tool manifest."""
     name: str
     label: str
-    type: str  # string | int | float | bool | enum | page_range | file
+    # string | int | float | bool | enum | page_range | file
+    type: str
     required: bool = False
     default: str | int | float | bool | None = None
-    options: list[str] | None = None  # for enum type
+    # for enum type
+    options: list[str] | None = None
     min: float | None = None
     max: float | None = None
     description: str = ""
@@ -33,8 +35,10 @@ class ToolManifest(BaseModel):
 class ToolInputSpec(BaseModel):
     min: int = 1
     max: int = 1
-    accept: list[str] = ["application/pdf"]  # MIME types
+    # MIME types
+    accept: list[str] = ["application/pdf"]
 
 
 class ToolOutputSpec(BaseModel):
-    type: str = "pdf"  # pdf | zip | images | text | json
+    # pdf | zip | images | text | json
+    type: str = "pdf"

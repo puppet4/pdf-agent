@@ -58,7 +58,8 @@ class PdfToHtmlTool(BaseTool):
         output_stem = workdir / localized_output_name(pdf_path, "转HTML", ext="")
         cmd = [bin_path, "-noframes", "-nodrm"]
         if params["single_page"]:
-            cmd.append("-s")  # single HTML file
+            # single HTML file
+            cmd.append("-s")
         cmd += [str(pdf_path), str(output_stem)]
         run_command(cmd)
 

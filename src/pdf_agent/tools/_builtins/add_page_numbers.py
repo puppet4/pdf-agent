@@ -126,7 +126,8 @@ class AddPageNumbersTool(BaseTool):
         )
 
 
-_MARGIN = 30  # points from edge
+# points from edge
+_MARGIN = 30
 
 
 def _make_number_overlay(
@@ -150,7 +151,8 @@ def _make_number_overlay(
         c.drawCentredString(page_w / 2, y, text)
     elif "left" in position:
         c.drawString(_MARGIN, y, text)
-    else:  # right
+    # right
+    else:
         c.drawRightString(page_w - _MARGIN, y, text)
 
     c.showPage()

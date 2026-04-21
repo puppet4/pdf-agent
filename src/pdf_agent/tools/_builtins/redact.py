@@ -158,7 +158,8 @@ def _rasterize_pages(
         # Rasterize each redacted page individually at 200 DPI
         rasterized_pdfs: dict[int, Path] = {}
         for page_idx in sorted(redacted_pages):
-            page_num = page_idx + 1  # gs uses 1-based
+            # gs uses 1-based
+            page_num = page_idx + 1
             img_prefix = tmp / f"page_{page_num:04d}"
             run_command(
                 [

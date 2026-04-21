@@ -61,7 +61,8 @@ class Settings(BaseSettings):
     # --- Limits ---
     max_upload_size_mb: int = 200
     max_page_count: int = 2000
-    external_cmd_timeout_sec: int = 1800  # 30 min
+    # 30 min
+    external_cmd_timeout_sec: int = 1800
     libreoffice_timeout_sec: int = 120
 
     # --- Access Control ---
@@ -72,26 +73,31 @@ class Settings(BaseSettings):
     min_api_key_length: int = 24
 
     # --- CORS ---
-    cors_origins: str = "*"  # comma-separated allowed origins
+    # comma-separated allowed origins
+    cors_origins: str = "*"
 
     # --- LangSmith ---
     langsmith_api_key: str = ""
     langsmith_project: str = "pdf-agent"
 
     # --- Rate Limiting ---
-    rate_limit_rpm: int = 200  # max chat requests per minute per IP, 0 = disabled
+    # max chat requests per minute per IP, 0 = disabled
+    rate_limit_rpm: int = 200
 
     # --- Cleanup ---
-    conversation_ttl_hours: int = 72  # delete expired conversation workdirs older than this
+    # delete expired conversation workdirs older than this
+    conversation_ttl_hours: int = 72
     max_storage_gb: int = 10
 
     # --- Observability ---
-    sentry_dsn: str = ""  # if set, enable Sentry error tracking
+    # if set, enable Sentry error tracking
+    sentry_dsn: str = ""
     metrics_enabled: bool = True
     degrade_on_state_backend_failure: bool = True
 
     # --- i18n ---
-    default_locale: str = "en"  # "en" or "zh"
+    # "en" or "zh"
+    default_locale: str = "en"
 
     # --- Compatibility ---
     legacy_api_compatibility_mode: Literal["disabled", "bridge"] = "bridge"

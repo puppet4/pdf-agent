@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 # Reserve tokens for system prompt + response; use the rest for history
 MAX_HISTORY_TOKENS = 100_000
-SUMMARY_THRESHOLD = 80_000  # start summarizing when approaching limit
+# start summarizing when approaching limit
+SUMMARY_THRESHOLD = 80_000
 _encoder: tiktoken.Encoding | None = None
 
 
@@ -147,7 +148,8 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
 
         for call in last_msg.tool_calls:
             tool_name = call["name"]
-            tool_args = dict(call["args"])  # copy to avoid mutating checkpointed data
+            # copy to avoid mutating checkpointed data
+            tool_args = dict(call["args"])
             call_id = call["id"]
 
             lc_tool = tool_map.get(tool_name)
@@ -249,7 +251,8 @@ def _should_continue(state: AgentState) -> str:
 def build_graph(
     checkpointer: AsyncPostgresSaver | None,
     tool_registry: ToolRegistry,
-) -> Any:  # CompiledStateGraph
+) -> Any:
+    # CompiledStateGraph
     """Compile the LangGraph StateGraph with agent and tool nodes."""
     # Adapt tools
     lc_tools = list(get_adapted_tool_map(tool_registry).values())

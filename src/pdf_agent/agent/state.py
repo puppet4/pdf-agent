@@ -13,8 +13,10 @@ class FileInfo(TypedDict):
     orig_name: str
     mime_type: str
     page_count: int | None
-    source: str  # "upload" | tool name that produced it
-    artifact_path: NotRequired[str]  # relative path like "step_1/output.pdf" for artifact sources
+    # "upload" | tool name that produced it
+    source: str
+    # relative path like "step_1/output.pdf" for artifact sources
+    artifact_path: NotRequired[str]
 
 
 def files_reducer(existing: list[FileInfo], new: list[FileInfo]) -> list[FileInfo]:
@@ -31,6 +33,7 @@ def files_reducer(existing: list[FileInfo], new: list[FileInfo]) -> list[FileInf
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     files: Annotated[list[FileInfo], files_reducer]
-    current_files: list[str]  # latest output file paths (replace reducer)
+    # latest output file paths (replace reducer)
+    current_files: list[str]
     conversation_workdir: str
     step_counter: int
