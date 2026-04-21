@@ -311,6 +311,7 @@ async def test_delete_file_returns_500_when_storage_cleanup_fails(
 
     monkeypatch.setattr("pdf_agent.api.files.FileService.get", _fake_get)
     monkeypatch.setattr("pdf_agent.api.files.shutil.rmtree", _raise_oserror)
+    monkeypatch.setattr("pdf_agent.api.files._resolve_storage_path", lambda p: Path(p))
 
     with pytest.raises(HTTPException) as exc_info:
         await delete_file(file_id=file_id, session=session)
@@ -346,6 +347,7 @@ async def test_delete_file_returns_warning_when_db_delete_fails_but_storage_remo
         return record
 
     monkeypatch.setattr("pdf_agent.api.files.FileService.get", _fake_get)
+    monkeypatch.setattr("pdf_agent.api.files._resolve_storage_path", lambda p: Path(p))
 
     result = await delete_file(file_id=file_id, session=session)
 
