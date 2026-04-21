@@ -106,6 +106,17 @@ export const mapConversationMessages = (messages) => {
           : (Array.isArray(message.downloads) ? message.downloads : []),
       }];
     }
+    if (message.type === "system") {
+      const content = message.content || "";
+      if (!content) {
+        return [];
+      }
+      return [{
+        id: `system-${index}`,
+        kind: "system",
+        content,
+      }];
+    }
     return [];
   });
 

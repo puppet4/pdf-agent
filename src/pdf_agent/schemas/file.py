@@ -14,3 +14,5 @@ class FileUploadResponse(BaseModel):
     size_bytes: int
     page_count: int | None = None
     created_at: datetime
+    download_url: str = ""
+    thumbnail_url: str | None = None

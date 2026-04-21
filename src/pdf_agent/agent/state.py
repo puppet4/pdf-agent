@@ -1,7 +1,7 @@
 """Graph state definitions for the LangGraph agent."""
 from __future__ import annotations
 
-from typing import Annotated, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -14,6 +14,7 @@ class FileInfo(TypedDict):
     mime_type: str
     page_count: int | None
     source: str  # "upload" | tool name that produced it
+    artifact_path: NotRequired[str]  # relative path like "step_1/output.pdf" for artifact sources
 
 
 def files_reducer(existing: list[FileInfo], new: list[FileInfo]) -> list[FileInfo]:

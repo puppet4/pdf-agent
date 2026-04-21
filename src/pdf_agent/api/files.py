@@ -109,7 +109,11 @@ async def _list_files_impl(page: int, limit: int, session: AsyncSession) -> dict
             "page_count": r.page_count,
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "download_url": f"/api/files/{r.id}/download",
-            "thumbnail_url": f"/api/files/{r.id}/thumbnail" if r.mime_type == "application/pdf" else None,
+            "thumbnail_url": (
+                f"/api/files/{r.id}/thumbnail"
+                if r.mime_type == "application/pdf" and Path(r.storage_path).parent.joinpath("thumbnail.jpg").exists()
+                else None
+            ),
         }
         for r in records
     ]
@@ -245,6 +249,7 @@ async def upload_file(
         raise
     finally:
         temp_path.unlink(missing_ok=True)
+    thumb_exists = record.mime_type == "application/pdf" and (Path(record.storage_path).parent / "thumbnail.jpg").exists()
     result = FileUploadResponse(
         id=record.id,
         orig_name=record.orig_name,
@@ -252,6 +257,8 @@ async def upload_file(
         size_bytes=record.size_bytes,
         page_count=record.page_count,
         created_at=record.created_at,
+        download_url=f"/api/files/{record.id}/download",
+        thumbnail_url=f"/api/files/{record.id}/thumbnail" if thumb_exists else None,
     )
     if idempotency_record_id is not None:
         await _safe_mark_succeeded(result.model_dump(mode="json"))

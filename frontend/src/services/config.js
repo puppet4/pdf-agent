@@ -11,3 +11,12 @@ export const getApiKey = () => {
     ''
   );
 };
+
+export const withApiKeyParam = (url) => {
+  const key = getApiKey();
+  if (!key || !url) {
+    return url;
+  }
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}api_key=${encodeURIComponent(key)}`;
+};

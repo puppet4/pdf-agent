@@ -1,5 +1,5 @@
 import React from 'react';
-import { API_BASE_URL } from '../services/config';
+import { API_BASE_URL, withApiKeyParam } from '../services/config';
 import { truncateText, formatBytes, fileExtension } from '../utils';
 
 const resolveAssetUrl = (value) => {
@@ -17,7 +17,7 @@ export const FileCard = ({ file, selected, onToggle, onDelete }) => {
     <div className={`file-card${selected ? " selected" : ""}`}>
       <button className="file-main" onClick={onToggle}>
         {file.thumbnail_url ? (
-          <img className="file-thumb" src={resolveAssetUrl(file.thumbnail_url)} alt={file.orig_name} />
+          <img className="file-thumb" src={withApiKeyParam(resolveAssetUrl(file.thumbnail_url))} alt={file.orig_name} />
         ) : (
           <div className="file-thumb fallback">{fileExtension(file.orig_name)}</div>
         )}
@@ -27,7 +27,7 @@ export const FileCard = ({ file, selected, onToggle, onDelete }) => {
         </div>
       </button>
       <div className="file-actions">
-        <a href={resolveAssetUrl(file.download_url)} className="file-link" download>
+        <a href={withApiKeyParam(resolveAssetUrl(file.download_url))} className="file-link" download>
           原件
         </a>
         <button

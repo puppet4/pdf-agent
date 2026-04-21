@@ -96,9 +96,11 @@ async def _resolve_uploaded_files(file_ids: list[str]) -> list[FileInfo]:
     for parsed_id in parsed_ids:
         record = records.get(parsed_id)
         if record is None:
-            raise HTTPException(status_code=404, detail=f"File {id_map[parsed_id]} not found")
+            logger.warning("Skipping missing file_id %s in message request", id_map[parsed_id])
+            continue
         if not Path(record.storage_path).exists():
-            raise HTTPException(status_code=404, detail=f"File {id_map[parsed_id]} not on disk")
+            logger.warning("Skipping file_id %s with missing storage path", id_map[parsed_id])
+            continue
         files.append(FileInfo(
             file_id=str(record.id),
             path=record.storage_path,
@@ -107,6 +109,8 @@ async def _resolve_uploaded_files(file_ids: list[str]) -> list[FileInfo]:
             page_count=record.page_count,
             source="upload",
         ))
+    if parsed_ids and not files:
+        raise HTTPException(status_code=404, detail="All requested files were deleted or not found")
     return files
 
 
@@ -130,6 +134,7 @@ def _artifact_path_to_file_info(conversation_id: str, artifact_path: str) -> Fil
         mime_type=guessed_mime,
         page_count=page_count,
         source="artifact",
+        artifact_path=artifact_path,
     )
 
 
@@ -156,11 +161,11 @@ def _artifact_step_sort_key(artifact_path: str) -> tuple[int, str]:
     return -1, artifact_path
 
 
-def _resolve_message_named_artifact_paths(conversation_dir: Path, message: str) -> list[str]:
+def _resolve_message_named_artifact_paths(conversation_dir: Path, message: str, conversation_id: str = "") -> list[str]:
     if not message.strip() or not conversation_dir.exists():
         return []
 
-    artifacts = _list_artifacts(conversation_dir, conversation_id="")
+    artifacts = _list_artifacts(conversation_dir, conversation_id=conversation_id)
     resolved: list[str] = []
     seen_filenames: set[str] = set()
     for artifact in sorted(artifacts, key=lambda item: _artifact_step_sort_key(item["path"]), reverse=True):
@@ -179,10 +184,11 @@ def _serialize_selected_input(file_info: FileInfo, conversation_id: str) -> dict
     item = {
         "name": file_info["orig_name"],
         "source": file_info["source"],
-        "type": file_info["mime_type"],
+        "mimeType": file_info["mime_type"],
     }
     if file_info["source"] == "artifact":
         item["path"] = _paths_to_download_urls(conversation_id, [path])[0]
+        item["artifactPath"] = file_info["artifact_path"]
     else:
         item["file_id"] = file_info["file_id"]
     return item
@@ -810,7 +816,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
     # Create conversation workdir only after request validation succeeds
     conversation_workdir = _resolve_conversation_dir(conversation_id)
     conversation_workdir.mkdir(parents=True, exist_ok=True)
-    message_named_artifact_paths = _resolve_message_named_artifact_paths(conversation_workdir, req.message)
+    message_named_artifact_paths = _resolve_message_named_artifact_paths(conversation_workdir, req.message, conversation_id=conversation_id)
     effective_artifact_paths = message_named_artifact_paths or req.artifact_paths
     selected_artifacts = _resolve_selected_artifacts(conversation_id, effective_artifact_paths)
     selected_inputs = (selected_artifacts + uploaded_files) if message_named_artifact_paths else (uploaded_files + selected_artifacts)

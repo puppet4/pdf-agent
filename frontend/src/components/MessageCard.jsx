@@ -1,5 +1,5 @@
 import React from 'react';
-import { API_BASE_URL } from '../services/config';
+import { API_BASE_URL, withApiKeyParam } from '../services/config';
 
 const resolveAssetUrl = (value) => {
   if (!value) {
@@ -29,7 +29,7 @@ export const MessageCard = ({ message }) => {
         {message.downloads && message.downloads.length > 0 && (
           <div className="inline-downloads">
             {message.downloads.map((file) => (
-              <a key={file} href={resolveAssetUrl(file)} download className="inline-download-btn">
+              <a key={file} href={withApiKeyParam(resolveAssetUrl(file))} download className="inline-download-btn">
                 {file.split("/").pop() || "DOWNLOAD"}
               </a>
             ))}
