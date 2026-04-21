@@ -93,7 +93,8 @@ class WatermarkImageTool(BaseTool):
             raise ToolError(ErrorCode.INVALID_INPUT_FILE, f"Cannot open watermark image: {exc}")
 
         if wm_img.mode == "RGBA":
-            pass  # keep alpha
+            # keep alpha
+            pass
         elif wm_img.mode != "RGB":
             wm_img = wm_img.convert("RGBA")
 
@@ -137,7 +138,8 @@ class WatermarkImageTool(BaseTool):
         )
 
 
-_MARGIN = 30  # points from edge
+# points from edge
+_MARGIN = 30
 
 
 def _make_image_overlay(
@@ -163,7 +165,8 @@ def _make_image_overlay(
         x, y = page_w - wm_w - _MARGIN, page_h - wm_h - _MARGIN
     elif position == "bottom_left":
         x, y = _MARGIN, _MARGIN
-    else:  # bottom_right
+    # bottom_right
+    else:
         x, y = page_w - wm_w - _MARGIN, _MARGIN
 
     buf = io.BytesIO()

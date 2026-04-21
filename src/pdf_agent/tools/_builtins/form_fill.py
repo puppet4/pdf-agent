@@ -124,7 +124,8 @@ class FormFillTool(BaseTool):
                             continue
                         try:
                             field["/V"] = String(params["field_values"][name])
-                            field["/AP"] = pikepdf.Dictionary()  # reset appearance
+                            # reset appearance
+                            field["/AP"] = pikepdf.Dictionary()
                         except Exception as exc:
                             raise ToolError(
                                 ErrorCode.OUTPUT_GENERATION_FAILED,

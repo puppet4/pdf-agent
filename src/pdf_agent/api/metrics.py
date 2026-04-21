@@ -19,10 +19,14 @@ class _Metrics:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self.request_count: dict[str, int] = {}        # method:path:status
-        self.request_duration: dict[str, tuple[int, float]] = {}  # method:path -> (count, total)
-        self.tool_count: dict[str, int] = {}            # tool_name
-        self.tool_duration: dict[str, tuple[int, float]] = {} # tool_name -> (count, total)
+        # method:path:status
+        self.request_count: dict[str, int] = {}
+        # method:path -> (count, total)
+        self.request_duration: dict[str, tuple[int, float]] = {}
+        # tool_name
+        self.tool_count: dict[str, int] = {}
+        # tool_name -> (count, total)
+        self.tool_duration: dict[str, tuple[int, float]] = {}
         self.conversation_run_count: dict[str, int] = {}
         self.conversation_duration: dict[str, tuple[int, float]] = {}
         self.conversation_state_load_count: dict[str, int] = {}

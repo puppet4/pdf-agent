@@ -151,7 +151,8 @@ async def _cleanup_loop(app: FastAPI):
     from pdf_agent.storage import storage
 
     while True:
-        await asyncio.sleep(3600)  # every hour
+        # every hour
+        await asyncio.sleep(3600)
         try:
             removed_conversations = await _cleanup_expired_conversations_with_checkpointer(
                 getattr(app.state, "checkpointer", None)

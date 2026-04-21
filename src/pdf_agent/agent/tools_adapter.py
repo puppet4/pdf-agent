@@ -36,7 +36,8 @@ _ERROR_RESULT_RE = re.compile(r"^Error:\s*(?:\[(?P<code>[A-Z_]+)\]\s*)?(?P<messa
 
 _ASYNC_SEMAPHORE: threading.Semaphore | None = None
 _SEMAPHORE_LOCK = threading.Lock()
-_MAX_CONCURRENT_ASYNC = 4  # max simultaneous OCR/compress/etc operations
+# max simultaneous OCR/compress/etc operations
+_MAX_CONCURRENT_ASYNC = 4
 
 
 def _get_semaphore() -> threading.Semaphore:
@@ -129,7 +130,8 @@ def _allowed_state_paths(state: AgentState) -> set[Path]:
 # Maps conversation_run_id -> (queue, creation_timestamp)
 _progress_queues: dict[str, tuple[queue.Queue, float]] = {}
 _progress_lock = threading.Lock()
-_PROGRESS_TTL_SEC = 3600  # 1 hour
+# 1 hour
+_PROGRESS_TTL_SEC = 3600
 
 
 def get_progress_queue(conversation_run_id: str) -> queue.Queue:
@@ -397,7 +399,8 @@ def adapt_all_tools(registry: ToolRegistry) -> list[StructuredTool]:
             name=manifest.name,
             description=manifest.description or manifest.label,
             args_schema=args_schema,
-            coroutine=wrapper,  # async wrapper
+            # async wrapper
+            coroutine=wrapper,
         )
         tools.append(lc_tool)
 

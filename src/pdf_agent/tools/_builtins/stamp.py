@@ -128,7 +128,8 @@ class StampTool(BaseTool):
                     x, y = pw - sw - margin, ph - sh - margin
                 elif pos == "bottom-left":
                     x, y = margin, margin
-                else:  # bottom-right
+                # bottom-right
+                else:
                     x, y = pw - sw - margin, margin
 
                 # Build overlay PDF

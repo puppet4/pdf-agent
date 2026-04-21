@@ -68,7 +68,8 @@ export const FileService = {
       const payload = await api("/api/files", { method: "POST", body });
       if (payload?.id) {
         createdIds.push(String(payload.id));
-      } else if (payload?.file_id) { // In case the backend returns file_id
+      // In case the backend returns file_id
+      } else if (payload?.file_id) {
         createdIds.push(String(payload.file_id));
       }
     }
