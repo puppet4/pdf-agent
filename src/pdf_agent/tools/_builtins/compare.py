@@ -79,6 +79,9 @@ class CompareTool(BaseTool):
             pages2 = len(pdf2_handle.pages)
 
             max_pages = max(pages1, pages2)
+            compare_limit = 100
+            if max_pages > compare_limit:
+                max_pages = compare_limit
             diff_pages = []
             diff_count = 0
             text_diffs: list[dict[str, object]] = []

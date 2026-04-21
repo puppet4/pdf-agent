@@ -63,41 +63,43 @@ class MergeTool(BaseTool):
         pdf_out = pikepdf.Pdf.new()
         mode = params["mode"]
 
-        if mode == "sequential":
-            for i, f in enumerate(inputs):
-                with pikepdf.open(f) as src:
-                    pdf_out.pages.extend(src.pages)
-                if reporter:
-                    reporter(int((i + 1) / len(inputs) * 100), f"Merged {i + 1}/{len(inputs)}")
-        else:
-            opened = [pikepdf.open(f) for f in inputs]
-            try:
-                if mode == "interleave":
-                    max_pages = max(len(p.pages) for p in opened)
-                    for page_idx in range(max_pages):
-                        for pdf in opened:
-                            if page_idx < len(pdf.pages):
-                                pdf_out.pages.append(pdf.pages[page_idx])
-                else:
-                    if len(opened) < 2:
-                        raise ToolError(ErrorCode.INVALID_INPUT_FILE, "Insert merge requires 2 PDFs")
-                    base_pdf = opened[0]
-                    insert_pdf = opened[1]
-                    insert_after = min(params["insert_position"], len(base_pdf.pages))
-                    for page_idx, page in enumerate(base_pdf.pages, start=1):
-                        pdf_out.pages.append(page)
-                        if page_idx == insert_after:
-                            pdf_out.pages.extend(insert_pdf.pages)
-                    if insert_after >= len(base_pdf.pages):
-                        pass
+        try:
+            if mode == "sequential":
+                for i, f in enumerate(inputs):
+                    with pikepdf.open(f) as src:
+                        pdf_out.pages.extend(src.pages)
+                    if reporter:
+                        reporter(int((i + 1) / len(inputs) * 100), f"Merged {i + 1}/{len(inputs)}")
                 pdf_out.save(output_path)
-            finally:
-                for pdf in opened:
-                    pdf.close()
-
-        if mode == "sequential":
-            pdf_out.save(output_path)
-        pdf_out.close()
+            else:
+                opened: list = []
+                try:
+                    for f in inputs:
+                        opened.append(pikepdf.open(f))
+                    if mode == "interleave":
+                        max_pages = max(len(p.pages) for p in opened)
+                        for page_idx in range(max_pages):
+                            for pdf in opened:
+                                if page_idx < len(pdf.pages):
+                                    pdf_out.pages.append(pdf.pages[page_idx])
+                    else:
+                        if len(opened) < 2:
+                            raise ToolError(ErrorCode.INVALID_INPUT_FILE, "Insert merge requires 2 PDFs")
+                        base_pdf = opened[0]
+                        insert_pdf = opened[1]
+                        insert_after = min(params["insert_position"], len(base_pdf.pages))
+                        for page_idx, page in enumerate(base_pdf.pages, start=1):
+                            pdf_out.pages.append(page)
+                            if page_idx == insert_after:
+                                pdf_out.pages.extend(insert_pdf.pages)
+                        if insert_after >= len(base_pdf.pages):
+                            pass
+                    pdf_out.save(output_path)
+                finally:
+                    for pdf in opened:
+                        pdf.close()
+        finally:
+            pdf_out.close()
 
         with pikepdf.open(output_path) as result_pdf:
             page_count = len(result_pdf.pages)

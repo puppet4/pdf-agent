@@ -76,7 +76,13 @@ class _Metrics:
         with self._lock:
             return self._exposition_unlocked()
 
+    @staticmethod
+    def _esc(value: str) -> str:
+        """Escape a Prometheus label value."""
+        return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
     def _exposition_unlocked(self) -> str:
+        _esc = self._esc
         lines: list[str] = ["# HELP pdf_agent_http_requests_total Total HTTP requests",
                             "# TYPE pdf_agent_http_requests_total counter"]
 
@@ -86,39 +92,39 @@ class _Metrics:
                 method, path, status = key.split(":", 2)
             except ValueError:
                 continue
-            lines.append(f'pdf_agent_http_requests_total{{method="{method}",path="{path}",status="{status}"}} {count}')
+            lines.append(f'pdf_agent_http_requests_total{{method="{_esc(method)}",path="{_esc(path)}",status="{_esc(status)}"}} {count}')
 
         # Request duration
         lines.append("# HELP pdf_agent_http_request_duration_seconds Request duration")
         lines.append("# TYPE pdf_agent_http_request_duration_seconds summary")
         for key, (count, total) in sorted(self.request_duration.items()):
             method, path = key.split(":", 1)
-            lines.append(f'pdf_agent_http_request_duration_seconds_sum{{method="{method}",path="{path}"}} {total:.4f}')
-            lines.append(f'pdf_agent_http_request_duration_seconds_count{{method="{method}",path="{path}"}} {count}')
+            lines.append(f'pdf_agent_http_request_duration_seconds_sum{{method="{_esc(method)}",path="{_esc(path)}"}} {total:.4f}')
+            lines.append(f'pdf_agent_http_request_duration_seconds_count{{method="{_esc(method)}",path="{_esc(path)}"}} {count}')
 
         # Tool counter
         lines.append("# HELP pdf_agent_tool_calls_total Total tool invocations")
         lines.append("# TYPE pdf_agent_tool_calls_total counter")
         for name, count in sorted(self.tool_count.items()):
-            lines.append(f'pdf_agent_tool_calls_total{{tool="{name}"}} {count}')
+            lines.append(f'pdf_agent_tool_calls_total{{tool="{_esc(name)}"}} {count}')
 
         # Tool duration
         lines.append("# HELP pdf_agent_tool_duration_seconds Tool run duration")
         lines.append("# TYPE pdf_agent_tool_duration_seconds summary")
         for name, (count, total) in sorted(self.tool_duration.items()):
-            lines.append(f'pdf_agent_tool_duration_seconds_sum{{tool="{name}"}} {total:.4f}')
-            lines.append(f'pdf_agent_tool_duration_seconds_count{{tool="{name}"}} {count}')
+            lines.append(f'pdf_agent_tool_duration_seconds_sum{{tool="{_esc(name)}"}} {total:.4f}')
+            lines.append(f'pdf_agent_tool_duration_seconds_count{{tool="{_esc(name)}"}} {count}')
 
         lines.append("# HELP pdf_agent_conversation_runs_total Conversation run status transitions")
         lines.append("# TYPE pdf_agent_conversation_runs_total counter")
         for status, count in sorted(self.conversation_run_count.items()):
-            lines.append(f'pdf_agent_conversation_runs_total{{status="{status}"}} {count}')
+            lines.append(f'pdf_agent_conversation_runs_total{{status="{_esc(status)}"}} {count}')
 
         lines.append("# HELP pdf_agent_conversation_run_duration_seconds Conversation run duration")
         lines.append("# TYPE pdf_agent_conversation_run_duration_seconds summary")
         for status, (count, total) in sorted(self.conversation_duration.items()):
-            lines.append(f'pdf_agent_conversation_run_duration_seconds_sum{{status="{status}"}} {total:.4f}')
-            lines.append(f'pdf_agent_conversation_run_duration_seconds_count{{status="{status}"}} {count}')
+            lines.append(f'pdf_agent_conversation_run_duration_seconds_sum{{status="{_esc(status)}"}} {total:.4f}')
+            lines.append(f'pdf_agent_conversation_run_duration_seconds_count{{status="{_esc(status)}"}} {count}')
 
         lines.append("# HELP pdf_agent_conversation_state_loads_total Conversation state load results")
         lines.append("# TYPE pdf_agent_conversation_state_loads_total counter")
@@ -128,7 +134,7 @@ class _Metrics:
             except ValueError:
                 continue
             lines.append(
-                f'pdf_agent_conversation_state_loads_total{{source="{source}",status="{status}"}} {count}'
+                f'pdf_agent_conversation_state_loads_total{{source="{_esc(source)}",status="{_esc(status)}"}} {count}'
             )
 
         lines.append("# HELP pdf_agent_degradation_events_total Total degraded execution paths")
@@ -139,7 +145,7 @@ class _Metrics:
             except ValueError:
                 continue
             lines.append(
-                f'pdf_agent_degradation_events_total{{path="{path}",reason="{reason}"}} {count}'
+                f'pdf_agent_degradation_events_total{{path="{_esc(path)}",reason="{_esc(reason)}"}} {count}'
             )
 
         lines.append("# HELP pdf_agent_idempotency_events_total Idempotency state transitions")
@@ -150,7 +156,7 @@ class _Metrics:
             except ValueError:
                 continue
             lines.append(
-                f'pdf_agent_idempotency_events_total{{scope="{scope}",action="{action}"}} {count}'
+                f'pdf_agent_idempotency_events_total{{scope="{_esc(scope)}",action="{_esc(action)}"}} {count}'
             )
 
         # LLM tokens

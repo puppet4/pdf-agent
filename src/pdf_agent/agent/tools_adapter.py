@@ -126,16 +126,24 @@ def _allowed_state_paths(state: AgentState) -> set[Path]:
 # SSE progress queue — keyed by conversation-run id at the app layer
 # ---------------------------------------------------------------------------
 
-# Maps conversation_run_id -> queue of (percent, message) progress updates
-_progress_queues: dict[str, queue.Queue] = {}
+# Maps conversation_run_id -> (queue, creation_timestamp)
+_progress_queues: dict[str, tuple[queue.Queue, float]] = {}
 _progress_lock = threading.Lock()
+_PROGRESS_TTL_SEC = 3600  # 1 hour
 
 
 def get_progress_queue(conversation_run_id: str) -> queue.Queue:
     with _progress_lock:
+        now = time.time()
+        stale = [k for k, (_, ts) in _progress_queues.items() if now - ts > _PROGRESS_TTL_SEC]
+        for k in stale:
+            _progress_queues.pop(k, None)
         if conversation_run_id not in _progress_queues:
-            _progress_queues[conversation_run_id] = queue.Queue(maxsize=100)
-        return _progress_queues[conversation_run_id]
+            _progress_queues[conversation_run_id] = (queue.Queue(maxsize=100), now)
+        else:
+            q, _ = _progress_queues[conversation_run_id]
+            _progress_queues[conversation_run_id] = (q, now)
+        return _progress_queues[conversation_run_id][0]
 
 
 def release_progress_queue(conversation_run_id: str):
@@ -198,6 +206,8 @@ def _state_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
         for index, path in enumerate(paths, start=1)
     ]
 
+
+_SENSITIVE_PARAMS = frozenset({"owner_password", "user_password", "p12_password"})
 
 # ---------------------------------------------------------------------------
 # Wrapper that bridges LangChain tool call → BaseTool.run()
@@ -302,6 +312,18 @@ async def _execute_tool_with_state(
             message=f"{manifest.name} failed: {exc}",
         ) from exc
 
+    # Validate output files stay within step_dir (allow input pass-through)
+    input_set = {p.resolve() for p in input_paths}
+    step_dir_resolved = step_dir.resolve()
+    for f in result.output_files:
+        if Path(f).resolve() in input_set:
+            continue
+        if not Path(f).resolve().is_relative_to(step_dir_resolved):
+            raise PDFAgentError(
+                code=ErrorCode.OUTPUT_GENERATION_FAILED,
+                message=f"{manifest.name} wrote output outside its work directory",
+            )
+
     metrics.record_tool(manifest.name, time.perf_counter() - start)
     return result
 
@@ -337,10 +359,11 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
 
         # --- Format result ---
         output_files = [str(f) for f in result.output_files]
+        safe_meta = {k: v for k, v in (result.meta or {}).items() if k not in _SENSITIVE_PARAMS}
         elapsed_seconds = round(time.perf_counter() - start, 3)
         payload = {
             "log": result.log,
-            "meta": result.meta,
+            "meta": safe_meta,
             "output_files": output_files,
             "elapsed_seconds": elapsed_seconds,
         }

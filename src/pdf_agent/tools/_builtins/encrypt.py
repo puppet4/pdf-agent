@@ -9,6 +9,7 @@ from pdf_agent.core import ErrorCode, ToolError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools.filenames import localized_output_name
+from pdf_agent.tools._builtins._utils import to_bool as _to_bool
 
 
 class EncryptTool(BaseTool):
@@ -109,11 +110,3 @@ class EncryptTool(BaseTool):
             meta={"has_user_password": bool(params["user_password"])},
             log="PDF encrypted successfully",
         )
-
-
-def _to_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() in ("true", "1", "yes")
-    return bool(value)

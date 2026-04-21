@@ -24,10 +24,11 @@ from pdf_agent.agent.state import FileInfo
 from pdf_agent.agent.tools_adapter import parse_tool_result_payload
 from pdf_agent.config import settings
 from pdf_agent.db import async_session_factory
+from pdf_agent.db.models import FileRecord
+from sqlalchemy import select
 from pdf_agent.api.http import content_disposition_headers
 from pdf_agent.api.metrics import metrics
 from pdf_agent.external_commands import cancel_conversation_processes
-from pdf_agent.services import FileService
 from pdf_agent.services.conversation_history import append_history_message, load_history_messages
 from pdf_agent.services.idempotency import build_request_hash, idempotency_service, normalize_idempotency_key
 
@@ -72,31 +73,40 @@ class MessageCreateRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 async def _resolve_uploaded_files(file_ids: list[str]) -> list[FileInfo]:
-    """Look up FileRecords by id and convert to FileInfo."""
+    """Look up FileRecords by id and convert to FileInfo (batch query)."""
     if not file_ids:
         return []
-    files: list[FileInfo] = []
+    parsed_ids: list[uuid.UUID] = []
+    id_map: dict[uuid.UUID, str] = {}
+    for fid in file_ids:
+        try:
+            parsed_id = uuid.UUID(fid)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid file_id: {fid}") from exc
+        parsed_ids.append(parsed_id)
+        id_map[parsed_id] = fid
+
     async with async_session_factory() as session:
-        svc = FileService(session)
-        for fid in file_ids:
-            try:
-                parsed_id = uuid.UUID(fid)
-            except ValueError as exc:
-                raise HTTPException(status_code=422, detail=f"Invalid file_id: {fid}") from exc
-            try:
-                record = await svc.get(parsed_id)
-            except Exception as exc:
-                raise HTTPException(status_code=404, detail=f"File {fid} not found") from exc
-            if not Path(record.storage_path).exists():
-                raise HTTPException(status_code=404, detail=f"File {fid} not on disk")
-            files.append(FileInfo(
-                file_id=str(record.id),
-                path=record.storage_path,
-                orig_name=record.orig_name,
-                mime_type=record.mime_type,
-                page_count=record.page_count,
-                source="upload",
-            ))
+        result = await session.execute(
+            select(FileRecord).where(FileRecord.id.in_(parsed_ids))
+        )
+        records = {r.id: r for r in result.scalars().all()}
+
+    files: list[FileInfo] = []
+    for parsed_id in parsed_ids:
+        record = records.get(parsed_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"File {id_map[parsed_id]} not found")
+        if not Path(record.storage_path).exists():
+            raise HTTPException(status_code=404, detail=f"File {id_map[parsed_id]} not on disk")
+        files.append(FileInfo(
+            file_id=str(record.id),
+            path=record.storage_path,
+            orig_name=record.orig_name,
+            mime_type=record.mime_type,
+            page_count=record.page_count,
+            source="upload",
+        ))
     return files
 
 
@@ -595,13 +605,11 @@ def _list_artifacts(conversation_dir: Path, conversation_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/conversations")
-async def list_conversations(page: int = 1, limit: int = 100):
-    """List all conversations."""
+def _list_conversations_sync() -> list[dict]:
+    """Synchronous filesystem scan — call via asyncio.to_thread()."""
     conversations_dir = settings.conversations_dir
     if not conversations_dir.exists():
-        return {"conversations": [], "total": 0, "page": 1, "limit": limit}
-
+        return []
     conversations = []
     for entry in conversations_dir.iterdir():
         try:
@@ -611,14 +619,22 @@ async def list_conversations(page: int = 1, limit: int = 100):
         except OSError:
             logger.warning("Failed to inspect conversation %s", entry, exc_info=True)
             continue
-
     conversations.sort(key=lambda item: item["updated_at"], reverse=True)
+    return conversations
+
+
+@router.get("/api/conversations")
+async def list_conversations(page: int = 1, limit: int = 100):
+    """List all conversations."""
+    all_conversations = await asyncio.to_thread(_list_conversations_sync)
+    if not all_conversations:
+        return {"conversations": [], "total": 0, "page": 1, "limit": limit}
     page = max(1, int(page))
     limit = max(1, min(int(limit), 200))
-    total = len(conversations)
+    total = len(all_conversations)
     start = (page - 1) * limit
     end = start + limit
-    return {"conversations": conversations[start:end], "total": total, "page": page, "limit": limit}
+    return {"conversations": all_conversations[start:end], "total": total, "page": page, "limit": limit}
 
 
 @router.post("/api/conversations")
@@ -947,6 +963,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                     terminated,
                     conversation_run_id,
                 )
+            yield _sse_event("done", {"status": "cancelled"})
             raise
         except Exception as e:
             run_status = "ERROR"

@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import logging
+import os
 import shutil
 import threading
 import time
@@ -33,22 +34,34 @@ class LocalStorage:
         self._size_cache: dict[str, tuple[float, tuple[bool, int, int], int]] = {}
 
     def save_upload(self, file_id: uuid.UUID, filename: str, content: bytes) -> Path:
-        """Save an uploaded file and return its storage path."""
+        """Save an uploaded file atomically and return its storage path."""
         dest_dir = settings.upload_dir / str(file_id)
         dest_dir.mkdir(parents=True, exist_ok=True)
         safe_name = Path(filename).name or "upload.bin"
         dest = dest_dir / safe_name
-        dest.write_bytes(content)
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        try:
+            tmp.write_bytes(content)
+            os.replace(tmp, dest)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         self.invalidate_size_cache()
         return dest
 
     def save_upload_from_path(self, file_id: uuid.UUID, filename: str, source_path: Path) -> Path:
-        """Persist a prepared upload file from a temporary location."""
+        """Persist a prepared upload file atomically from a temporary location."""
         dest_dir = settings.upload_dir / str(file_id)
         dest_dir.mkdir(parents=True, exist_ok=True)
         safe_name = Path(filename).name or "upload.bin"
         dest = dest_dir / safe_name
-        shutil.copy2(source_path, dest)
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        try:
+            shutil.copy2(source_path, tmp)
+            os.replace(tmp, dest)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         self.invalidate_size_cache()
         return dest
 

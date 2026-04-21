@@ -9,8 +9,9 @@ import logging
 from typing import Any, Literal
 import uuid
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from pdf_agent.config import settings
 from pdf_agent.db import async_session_factory
@@ -95,7 +96,6 @@ class IdempotencyService:
         key_hash = _hash_key(key)
 
         async with async_session_factory() as session:
-            await session.execute(delete(IdempotencyRecord).where(IdempotencyRecord.expires_at < now))
             candidate = IdempotencyRecord(
                 scope=scope,
                 key_hash=key_hash,
@@ -286,10 +286,12 @@ class IdempotencyService:
         response_code: int,
         response_payload: dict[str, Any] | None,
         error_message: str | None,
+        external_session: AsyncSession | None = None,
     ) -> None:
         payload = json.dumps(response_payload, ensure_ascii=False, default=str) if response_payload else None
-        async with async_session_factory() as session:
-            await session.execute(
+
+        async def _execute(s: AsyncSession) -> None:
+            await s.execute(
                 update(IdempotencyRecord)
                 .where(IdempotencyRecord.id == record_id)
                 .values(
@@ -300,7 +302,13 @@ class IdempotencyService:
                     updated_at=_utcnow(),
                 )
             )
-            await session.commit()
+            await s.commit()
+
+        if external_session is not None:
+            await _execute(external_session)
+        else:
+            async with async_session_factory() as session:
+                await _execute(session)
 
     async def _try_takeover_expired(
         self,
@@ -338,7 +346,10 @@ class IdempotencyService:
     ) -> bool:
         result = await session.execute(
             update(IdempotencyRecord)
-            .where(IdempotencyRecord.id == record_id)
+            .where(
+                IdempotencyRecord.id == record_id,
+                IdempotencyRecord.status.in_([STATUS_FAILED, STATUS_PROCESSING]),
+            )
             .values(
                 request_hash=request_hash,
                 status=STATUS_PROCESSING,

@@ -1,6 +1,7 @@
 """Files API - upload, list, download files."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 import shutil
@@ -33,6 +34,15 @@ from pdf_agent.storage import storage
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 logger = logging.getLogger(__name__)
+
+
+def _resolve_storage_path(record_storage_path: str) -> Path:
+    """Resolve and validate that storage_path is within upload_dir."""
+    path = Path(record_storage_path).resolve()
+    upload_root = settings.upload_dir.resolve()
+    if not path.is_relative_to(upload_root):
+        raise HTTPException(status_code=500, detail="Storage path validation failed")
+    return path
 _content_disposition_headers = content_disposition_headers
 
 def _normalize_upload_content_type(filename: str, content_type: str | None) -> str:
@@ -84,14 +94,12 @@ async def list_files(
 
 
 async def _list_files_impl(page: int, limit: int, session: AsyncSession) -> dict:
-    """List all uploaded files."""
-    records = await FileService(session).list_records()
+    """List all uploaded files with database-level pagination."""
+    svc = FileService(session)
     page = max(1, int(page))
     limit = max(1, min(int(limit), 200))
-    total = len(records)
-    start = (page - 1) * limit
-    end = start + limit
-    records = records[start:end]
+    total = await svc.count_records()
+    records = await svc.list_records_paginated(page, limit)
     files = [
         {
             "id": str(r.id),
@@ -265,7 +273,7 @@ async def delete_file(
         record = await svc.get(file_id)
     except PDFAgentError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    file_dir = Path(record.storage_path).parent
+    file_dir = _resolve_storage_path(record.storage_path).parent
     persisted = False
     metadata_delete_failed = False
     try:
@@ -306,7 +314,7 @@ async def download_file(
     """Download an uploaded file."""
     svc = FileService(session)
     record = await svc.get(file_id)
-    path = Path(record.storage_path)
+    path = _resolve_storage_path(record.storage_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
     return FileResponse(
@@ -337,7 +345,7 @@ async def get_page_image(
     if record.page_count and (page < 1 or page > record.page_count):
         raise HTTPException(status_code=400, detail=f"Page {page} out of range (1-{record.page_count})")
 
-    pdf_path = Path(record.storage_path)
+    pdf_path = _resolve_storage_path(record.storage_path)
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
 
@@ -348,7 +356,8 @@ async def get_page_image(
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     render_dir = Path(tempfile.mkdtemp(prefix="page-preview-", dir=settings.data_dir))
     out_stem = render_dir / "page"
-    result = run_command(
+    result = await asyncio.to_thread(
+        run_command,
         [pdftoppm, "-r", "96", "-jpeg", "-f", str(page), "-l", str(page),
          "-scale-to", "400", str(pdf_path), str(out_stem)],
         check=False,
@@ -382,7 +391,7 @@ async def get_thumbnail(
     """Return the thumbnail image for an uploaded PDF (JPG)."""
     svc = FileService(session)
     record = await svc.get(file_id)
-    thumb_path = Path(record.storage_path).parent / "thumbnail.jpg"
+    thumb_path = _resolve_storage_path(record.storage_path).parent / "thumbnail.jpg"
     if not thumb_path.exists():
         raise HTTPException(status_code=404, detail="Thumbnail not available")
     return FileResponse(thumb_path, media_type="image/jpeg")

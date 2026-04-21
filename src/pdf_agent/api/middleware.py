@@ -102,7 +102,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if not policy.enabled:
             return await call_next(request)
 
-        if request.url.path in settings.auth_exempt_path_set:
+        path = request.url.path
+        if path in settings.auth_exempt_path_set or any(
+            path.startswith(ep + "/") for ep in settings.auth_exempt_path_set
+        ):
             return await call_next(request)
 
         provided = request.headers.get(settings.api_key_header_name)
