@@ -108,7 +108,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         ):
             return await call_next(request)
 
-        provided = request.headers.get(settings.api_key_header_name)
+        provided = (
+            request.headers.get(settings.api_key_header_name)
+            or request.query_params.get("api_key")
+        )
         expected = policy.api_key or ""
         if not provided or not hmac.compare_digest(provided, expected):
             return JSONResponse(

@@ -1,6 +1,6 @@
 import { API_BASE_URL, getApiKey } from './config';
 
-const BACKEND_UNAVAILABLE_MESSAGE = "无法连接后端服务（http://127.0.0.1:8000）。请确认 API 已启动。";
+const BACKEND_UNAVAILABLE_MESSAGE = "无法连接后端服务。请确认 API 已启动。";
 
 const normalizeApiErrorMessage = (message, status) => {
   const raw = typeof message === "string" ? message.trim() : "";
@@ -46,9 +46,11 @@ export const api = async (path, options = {}) => {
     } catch {
       payload = {};
     }
-    throw new Error(
+    const err = new Error(
       normalizeApiErrorMessage(payload.detail || payload.message || text, response.status)
     );
+    err.status = response.status;
+    throw err;
   }
 
   if (response.status === 204) {
@@ -138,6 +140,12 @@ export const parseSseBlock = (block) => {
 };
 
 export const consumeSse = async (response, handlers) => {
+  if (!response.body) {
+    if (handlers.error) {
+      handlers.error({ message: "响应流不可用" });
+    }
+    return;
+  }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";

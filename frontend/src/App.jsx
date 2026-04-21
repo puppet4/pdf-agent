@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FileService, ConversationService, consumeSse } from './services/api';
-import { API_BASE_URL } from './services/config';
+import { API_BASE_URL, withApiKeyParam } from './services/config';
 import { MessageCard } from './components/MessageCard.jsx';
 import { truncateText, formatBytes, formatTime, mapConversationMessages, normalizeConversationTitle, fileExtension } from './utils';
 
@@ -87,6 +87,9 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (isSending) {
+      return undefined;
+    }
     const timer = window.setInterval(() => {
       loadFiles().catch(() => {});
       loadConversations().catch(() => {});
@@ -95,7 +98,7 @@ function App() {
       }
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [currentConversationId]);
+  }, [currentConversationId, isSending]);
 
   useEffect(() => {
     if (messageEndRef.current) {
@@ -146,6 +149,8 @@ function App() {
   const loadFiles = async () => {
     const nextFiles = await FileService.getFiles();
     setFiles(nextFiles);
+    const validIds = new Set(nextFiles.map((f) => String(f.id)));
+    setSelectedFileIds((current) => current.filter((id) => validIds.has(id)));
   };
 
   const loadConversations = async () => {
@@ -169,7 +174,8 @@ function App() {
       setSelectedFileIds([]);
       setSurfaceError("");
     } catch (e) {
-      if (e?.message === "Conversation not found") {
+      const status = e?.status || 0;
+      if (status === 404 || e?.message?.includes("not found") || e?.message?.includes("未找到")) {
         setConversations((current) => current.filter((item) => item.id !== conversationId));
         if (currentConversationId === conversationId) {
           setCurrentConversationId("");
@@ -227,11 +233,11 @@ function App() {
     setSurfaceError("");
     try {
       const createdIds = await FileService.uploadFiles(fileList);
-      const nextFiles = await FileService.getFiles();
-      setFiles(nextFiles);
       if (createdIds.length > 0) {
         setSelectedFileIds((current) => Array.from(new Set([...createdIds, ...current])));
       }
+      const nextFiles = await FileService.getFiles();
+      setFiles(nextFiles);
     } catch (error) {
       setSurfaceError(error.message);
     }
@@ -397,7 +403,7 @@ function App() {
     if (/^https?:\/\//i.test(value)) {
       return value;
     }
-    return `${API_BASE_URL}${value}`;
+    return withApiKeyParam(`${API_BASE_URL}${value}`);
   };
 
   const inferPreviewKind = (name, mimeType = "", url = "") => {
@@ -578,7 +584,7 @@ function App() {
 
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.detail || `HTTP ${response.status}`);
+        throw new Error(payload.detail || payload.message || `HTTP ${response.status}`);
       }
 
       await consumeSse(response, {
@@ -678,6 +684,19 @@ function App() {
             content: data.message || "处理失败。",
           });
           setSurfaceError(data.message || "处理失败。");
+        },
+        idempotency_replay(data) {
+          if (Array.isArray(data.artifacts) && data.artifacts.length > 0) {
+            pendingArtifactUrlsRef.current = Array.from(new Set([
+              ...pendingArtifactUrlsRef.current,
+              ...data.artifacts.filter(Boolean),
+            ]));
+            attachDownloadsToCurrentStep(data.artifacts);
+            upsertAssistantDownloads(pendingArtifactUrlsRef.current);
+          }
+          if (streamingStepIdRef.current) {
+            finalizeStepMessage({ status: "DONE", progress: 100, progressLabel: "已从缓存恢复" });
+          }
         }
       });
 
@@ -934,7 +953,7 @@ function App() {
                                     name: attachment.name,
                                     mimeType: attachment.mimeType || attachment.type || "",
                                     previewUrl: attachment.previewUrl || withInlinePreview(attachment.path),
-                                    downloadUrl: attachment.downloadUrl || attachment.path || (attachment.fileId ? `/api/files/${attachment.fileId}/download` : ""),
+                                    downloadUrl: attachment.downloadUrl || attachment.path || ((attachment.fileId || attachment.file_id) ? `/api/files/${attachment.fileId || attachment.file_id}/download` : ""),
                                   })}
                                 >
                                   <div className="message-file-badge">{fileExtension(attachment.name)}</div>
