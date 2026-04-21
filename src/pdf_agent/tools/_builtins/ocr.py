@@ -10,6 +10,7 @@ from pdf_agent.external_commands import run_command
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools.filenames import localized_output_name
+from pdf_agent.tools._builtins._utils import to_bool as _to_bool
 
 
 class OcrTool(BaseTool):
@@ -129,11 +130,3 @@ class OcrTool(BaseTool):
             meta={"language": params["language"], "page_range": params["page_range"], "output_mode": params["output_mode"]},
             log=f"OCR completed with language={params['language']} output={params['output_mode']}",
         )
-
-
-def _to_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() in ("true", "1", "yes")
-    return bool(value)

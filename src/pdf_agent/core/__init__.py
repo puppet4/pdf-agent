@@ -68,5 +68,27 @@ class PDFAgentError(Exception):
         super().__init__(f"[{code}] {message}")
 
 
+_ERROR_HTTP_STATUS: dict[str, int] = {
+    ErrorCode.FILE_NOT_FOUND: 404,
+    ErrorCode.JOB_NOT_FOUND: 404,
+    ErrorCode.FILE_TOO_LARGE: 413,
+    ErrorCode.PAGE_COUNT_EXCEEDED: 413,
+    ErrorCode.STORAGE_LIMIT_EXCEEDED: 507,
+    ErrorCode.UNSUPPORTED_FORMAT: 415,
+    ErrorCode.INVALID_INPUT_FILE: 422,
+    ErrorCode.INVALID_PARAMS: 422,
+    ErrorCode.INVALID_PAGE_RANGE: 422,
+    ErrorCode.ENGINE_NOT_INSTALLED: 503,
+    ErrorCode.ENGINE_EXEC_TIMEOUT: 504,
+    ErrorCode.ENGINE_EXEC_FAILED: 500,
+    ErrorCode.OUTPUT_GENERATION_FAILED: 500,
+    ErrorCode.JOB_CANCELED: 499,
+}
+
+
+def error_http_status(code: str) -> int:
+    return _ERROR_HTTP_STATUS.get(code, 400)
+
+
 class ToolError(PDFAgentError):
     pass

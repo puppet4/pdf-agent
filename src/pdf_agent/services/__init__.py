@@ -287,8 +287,8 @@ class FileService:
                     "PDF is corrupt or unreadable",
                 ) from exc
 
-        sha256 = storage.compute_sha256_file(temp_path)
         path = storage.save_upload_from_path(file_id, filename, temp_path)
+        sha256 = storage.compute_sha256_file(path)
 
         # Generate thumbnail for PDFs
         thumb_path = path.parent / "thumbnail.jpg"
@@ -334,6 +334,27 @@ class FileService:
         except Exception:
             logger.warning("Database read failed while listing uploads; falling back to filesystem index", exc_info=True)
             return list_storage_records()
+
+    async def count_records(self) -> int:
+        from sqlalchemy import func
+        try:
+            result = await self.session.execute(select(func.count()).select_from(FileRecord))
+            return result.scalar_one()
+        except Exception:
+            records = list_storage_records()
+            return len(records)
+
+    async def list_records_paginated(self, page: int, limit: int) -> list[FileRecord]:
+        offset = (page - 1) * limit
+        try:
+            result = await self.session.execute(
+                select(FileRecord).order_by(FileRecord.created_at.desc()).offset(offset).limit(limit)
+            )
+            return list(result.scalars().all())
+        except Exception:
+            logger.warning("Database read failed while listing uploads; falling back to filesystem index", exc_info=True)
+            records = list_storage_records()
+            return records[offset:offset + limit]
 
     async def get(self, file_id: uuid.UUID) -> FileRecord:
         try:

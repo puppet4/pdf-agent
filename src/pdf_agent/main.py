@@ -366,6 +366,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+if settings.cors_origin_list == ["*"]:
+    logger.warning("CORS allows all origins (cors_origins='*'). Set PDF_AGENT_CORS_ORIGINS for production.")
 
 # Routes
 app.include_router(api_router)
@@ -373,12 +375,11 @@ app.include_router(api_router)
 
 @app.exception_handler(PDFAgentError)
 async def pdf_agent_error_handler(request: Request, exc: PDFAgentError) -> JSONResponse:
-    from pdf_agent.core import localized_error
-    # Use Accept-Language header to pick locale
+    from pdf_agent.core import error_http_status, localized_error
     accept_lang = request.headers.get("Accept-Language", "")
     locale = "zh" if "zh" in accept_lang else settings.default_locale
     return JSONResponse(
-        status_code=400,
+        status_code=error_http_status(exc.code),
         content={
             "error_code": exc.code,
             "message": localized_error(exc.code, exc.message, locale),

@@ -4,7 +4,13 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
-import xml.etree.ElementTree as ET
+try:
+    from defusedxml.ElementTree import parse as _safe_parse
+except ImportError:
+    import xml.etree.ElementTree as _et
+
+    def _safe_parse(path: str):
+        return _et.parse(path)
 from pathlib import Path
 
 import pikepdf
@@ -231,7 +237,7 @@ def _find_text_boxes(pdf_path: Path, text_query: str) -> list[dict[str, float | 
             detail = result.stderr.decode("utf-8", errors="replace").strip() or "pdftotext failed"
             raise ToolError(ErrorCode.ENGINE_EXEC_FAILED, detail)
 
-        tree = ET.parse(xml_path)
+        tree = _safe_parse(str(xml_path))
         root = tree.getroot()
         boxes: list[dict[str, float | int]] = []
         for page_number, page in enumerate(root.findall(".//{*}page"), start=1):
