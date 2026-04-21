@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import NullPool
@@ -25,6 +26,33 @@ class TestCoreSurfaceSmoke:
         assert "/api/executions" in paths
         assert "/api/workflows" in paths
         assert "/" not in paths
+
+    def test_healthz_returns_200_with_mock_db(self):
+        from unittest.mock import AsyncMock
+
+        from pdf_agent.main import app
+
+        client = TestClient(app)
+        mock_session = AsyncMock()
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__.return_value = mock_session
+        mock_cm.__aexit__.return_value = False
+        with (
+            patch("pdf_agent.api.health.async_session_factory", return_value=mock_cm),
+            patch("pdf_agent.api.health.settings") as mock_settings,
+        ):
+            mock_settings.openai_api_key = ""
+            mock_settings.environment = "development"
+            mock_settings.default_locale = "en"
+            mock_settings.auth_policy = type("P", (), {"enabled": False, "mode": "disabled"})()
+            mock_settings.legacy_api_compatibility_mode = "disabled"
+            mock_settings.legacy_api_phase = "sunset"
+            response = client.get("/healthz")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["database"] == "ok"
 
     def test_healthz_returns_structured_payload(self):
         from pdf_agent.main import app

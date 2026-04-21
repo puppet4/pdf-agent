@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -507,6 +508,7 @@ class TestAllBuiltinsCoverage:
         assert compare_result.output_files[0].suffix == ".pdf"
         assert compare_result.output_files[1].suffix == ".json"
 
+    @pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed")
     def test_ocr_tool(self, scanned_pdf: Path, workdir: Path):
         ocr_result = OcrTool().run(
             [scanned_pdf],

@@ -11,6 +11,13 @@ jobs:
     name: Lint & Test
     runs-on: ubuntu-latest
 
+    env:
+      PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent
+      PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@localhost:5432/pdf_agent
+      PDF_AGENT_OPENAI_API_KEY: sk-placeholder
+      PDF_AGENT_ENVIRONMENT: test
+      PDF_AGENT_API_KEY: ci-smoke-key-ci-smoke-key
+
     services:
       postgres:
         image: postgres:16-alpine
@@ -33,6 +40,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: pip
 
       - name: Install uv
         run: pip install uv
@@ -46,44 +54,24 @@ jobs:
       - name: Ruff lint
         run: ruff check src/ tests/
 
+      - name: Ruff format check
+        run: ruff format --check src/ tests/
+
       - name: Run migrations
-        env:
-          PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent
-          PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@localhost:5432/pdf_agent
-          PDF_AGENT_OPENAI_API_KEY: sk-placeholder
-          PDF_AGENT_ENVIRONMENT: test
-          PDF_AGENT_API_KEY: ci-smoke-key-ci-smoke-key
         run: |
           find . -name '*.pyc' -delete
           find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
           alembic upgrade head
 
       - name: Verify migration rollback loop
-        env:
-          PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent
-          PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@localhost:5432/pdf_agent
-          PDF_AGENT_OPENAI_API_KEY: sk-placeholder
-          PDF_AGENT_ENVIRONMENT: test
-          PDF_AGENT_API_KEY: ci-smoke-key-ci-smoke-key
         run: bash scripts/verify_migrations.sh
 
       - name: Run tests
-        env:
-          PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent
-          PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@localhost:5432/pdf_agent
-          PDF_AGENT_OPENAI_API_KEY: sk-placeholder
-          PDF_AGENT_ENVIRONMENT: test
-          PDF_AGENT_API_KEY: ci-smoke-key-ci-smoke-key
         run: python -m pytest tests/ -v --tb=short
 
       - name: Smoke test (API endpoints)
-        env:
-          PDF_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pdf_agent
-          PDF_AGENT_CHECKPOINTER_DB_URL: postgresql://postgres:postgres@localhost:5432/pdf_agent
-          PDF_AGENT_OPENAI_API_KEY: sk-placeholder
-          PDF_AGENT_ENVIRONMENT: test
-          PDF_AGENT_API_KEY: ci-smoke-key-ci-smoke-key
         run: |
+          set -euo pipefail
           uvicorn pdf_agent.main:app --host 127.0.0.1 --port 8765 &
           SERVER_PID=$!
           trap 'kill $SERVER_PID >/dev/null 2>&1 || true' EXIT

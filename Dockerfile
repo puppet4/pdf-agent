@@ -40,11 +40,12 @@ COPY alembic.ini .
 
 # Create non-root user
 RUN groupadd -r pdfagent && useradd -r -g pdfagent -d /app pdfagent && \
-    mkdir -p /app/data && chown -R pdfagent:pdfagent /app/data
+    mkdir -p /app/data && chown -R pdfagent:pdfagent /app/data /app
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src
 
+USER pdfagent
 EXPOSE 8000
 
 CMD ["uvicorn", "pdf_agent.main:app", "--host", "0.0.0.0", "--port", "8000"]
