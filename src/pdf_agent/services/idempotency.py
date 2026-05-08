@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import hashlib
 import json
 import logging
@@ -199,7 +200,7 @@ class IdempotencyService:
                     .order_by(FileRecord.created_at.desc())
                 )
                 record = file_result.scalars().first()
-                if record is not None:
+                if record is not None and Path(record.storage_path).exists():
                     payload = {
                         "id": str(record.id),
                         "orig_name": record.orig_name,
@@ -216,13 +217,13 @@ class IdempotencyService:
                     fixed_success += 1
                     continue
 
-                if row.updated_at and (now - row.updated_at) <= stale_timeout:
+                if record is None or (row.updated_at and (now - row.updated_at) <= stale_timeout):
                     skipped_recent += 1
                     continue
 
                 row.status = STATUS_FAILED
                 row.response_code = 408
-                row.error_message = "Idempotency request timed out before completion"
+                row.error_message = "Idempotency request timed out before completion or file missing"
                 row.updated_at = now
                 fixed_failed += 1
             await session.commit()

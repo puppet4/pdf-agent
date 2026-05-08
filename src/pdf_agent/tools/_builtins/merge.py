@@ -1,6 +1,7 @@
 """Merge tool - combine multiple PDFs into one."""
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import pikepdf
@@ -72,10 +73,8 @@ class MergeTool(BaseTool):
                         reporter(int((i + 1) / len(inputs) * 100), f"Merged {i + 1}/{len(inputs)}")
                 pdf_out.save(output_path)
             else:
-                opened: list = []
-                try:
-                    for f in inputs:
-                        opened.append(pikepdf.open(f))
+                with contextlib.ExitStack() as stack:
+                    opened = [stack.enter_context(pikepdf.open(f)) for f in inputs]
                     if mode == "interleave":
                         max_pages = max(len(p.pages) for p in opened)
                         for page_idx in range(max_pages):
@@ -95,9 +94,6 @@ class MergeTool(BaseTool):
                         if insert_after >= len(base_pdf.pages):
                             pass
                     pdf_out.save(output_path)
-                finally:
-                    for pdf in opened:
-                        pdf.close()
         finally:
             pdf_out.close()
 

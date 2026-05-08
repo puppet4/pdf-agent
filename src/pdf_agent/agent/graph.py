@@ -1,6 +1,7 @@
 """LangGraph StateGraph construction — agent + custom tool node."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 import uuid
@@ -22,16 +23,27 @@ from pdf_agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-# Reserve tokens for system prompt + response; use the rest for history
 MAX_HISTORY_TOKENS = 100_000
-SUMMARY_THRESHOLD = 80_000  # start summarizing when approaching limit
+SUMMARY_THRESHOLD = 80_000
 _encoder: tiktoken.Encoding | None = None
+_encoder_lock: asyncio.Lock | None = None
 
 
-def _get_encoder() -> tiktoken.Encoding:
-    """Lazy-load the tiktoken encoder for the configured model."""
+def _get_encoder_lock() -> asyncio.Lock:
+    global _encoder_lock
+    if _encoder_lock is None:
+        _encoder_lock = asyncio.Lock()
+    return _encoder_lock
+
+
+async def _get_encoder() -> tiktoken.Encoding:
     global _encoder
-    if _encoder is None:
+    if _encoder is not None:
+        return _encoder
+    lock = _get_encoder_lock()
+    async with lock:
+        if _encoder is not None:
+            return _encoder
         try:
             _encoder = tiktoken.encoding_for_model(settings.openai_model)
         except KeyError:
@@ -40,8 +52,9 @@ def _get_encoder() -> tiktoken.Encoding:
 
 
 def _tiktoken_counter(messages: list) -> int:
-    """Count tokens for a list of LangChain messages using tiktoken."""
-    enc = _get_encoder()
+    enc = _encoder
+    if enc is None:
+        return 0
     total = 0
     for msg in messages:
         content = msg.content if hasattr(msg, "content") else str(msg)
@@ -53,7 +66,6 @@ def _tiktoken_counter(messages: list) -> int:
                     total += len(enc.encode(part, disallowed_special=()))
                 elif isinstance(part, dict) and "text" in part:
                     total += len(enc.encode(part["text"], disallowed_special=()))
-        # Overhead per message (role, separators)
         total += 4
     return total
 
@@ -66,7 +78,10 @@ def _make_agent_node(model_with_tools: ChatOpenAI):
     """Return the agent node function that calls the LLM."""
 
     async def agent_node(state: AgentState) -> dict[str, Any]:
-        # Build dynamic system prompt
+        global _encoder
+        if _encoder is None:
+            _encoder = await _get_encoder()
+
         sys_prompt = build_system_prompt(
             files=state.get("files", []),
             current_files=state.get("current_files", []),

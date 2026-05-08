@@ -144,9 +144,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not _should_rate_limit(request):
             return await call_next(request)
 
-        client_key = request.headers.get("X-API-Key") or (request.client.host if request.client else "unknown")
+        client_ip = get_client_ip(request)
 
-        blocked = await asyncio.to_thread(self._check_and_record, client_key)
+        blocked = await asyncio.to_thread(self._check_and_record, client_ip)
         if blocked:
             return JSONResponse(
                 status_code=429,
@@ -178,3 +178,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             state[client_key] = requests
             _save_rate_limit_state(state)
         return False
+
+
+def get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else "unknown"

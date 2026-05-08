@@ -397,7 +397,10 @@ function App() {
     if (/^https?:\/\//i.test(value)) {
       return value;
     }
-    return `${API_BASE_URL}${value}`;
+    if (value.startsWith('/')) {
+      return `${API_BASE_URL}${value}`;
+    }
+    return "";
   };
 
   const inferPreviewKind = (name, mimeType = "", url = "") => {

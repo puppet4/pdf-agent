@@ -41,10 +41,6 @@ _INTERNAL_KEYS = {"state", "tool_call_id", "progress_reporter"}
 _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SENSITIVE_ARG_RE = re.compile(r"(password|secret|token|api[_-]?key|authorization)", re.IGNORECASE)
 
-# Heartbeat interval during a tool run (seconds)
-_HEARTBEAT_INTERVAL = 5.0
-_DEFAULT_CONVERSATION_TITLE = "新会话"
-_MAX_CONVERSATION_TITLE_LENGTH = 48
 _CONVERSATION_STATS_CACHE_FILE = ".conversation_stats.json"
 
 _content_disposition_headers = content_disposition_headers
@@ -331,6 +327,8 @@ def _resolve_conversation_artifact_path(
         candidate.relative_to(conversation_dir)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid conversation artifact path") from exc
+    if candidate.is_symlink() or not candidate.is_file():
+        raise HTTPException(status_code=400, detail="Invalid conversation artifact path")
     return candidate
 
 
@@ -348,23 +346,23 @@ def _conversation_title_path(conversation_dir: Path) -> Path:
 def _sanitize_conversation_title(raw: str) -> str:
     normalized = " ".join((raw or "").strip().split())
     if normalized == "New Conversation":
-        normalized = _DEFAULT_CONVERSATION_TITLE
+        normalized = settings.default_conversation_title
     if not normalized:
-        return _DEFAULT_CONVERSATION_TITLE
-    if len(normalized) > _MAX_CONVERSATION_TITLE_LENGTH:
-        return normalized[: _MAX_CONVERSATION_TITLE_LENGTH - 1].rstrip() + "…"
+        return settings.default_conversation_title
+    if len(normalized) > settings.max_conversation_title_length:
+        return normalized[: settings.max_conversation_title_length - 1].rstrip() + "…"
     return normalized
 
 
 def _read_conversation_title(conversation_dir: Path) -> str:
     title_path = _conversation_title_path(conversation_dir)
     if not title_path.exists():
-        return _DEFAULT_CONVERSATION_TITLE
+        return settings.default_conversation_title
     try:
         return _sanitize_conversation_title(title_path.read_text(encoding="utf-8"))
     except OSError:
         logger.warning("Failed to read conversation title from %s", title_path, exc_info=True)
-        return _DEFAULT_CONVERSATION_TITLE
+        return settings.default_conversation_title
 
 
 def _write_conversation_title(conversation_dir: Path, title: str) -> None:
@@ -643,7 +641,7 @@ async def create_conversation():
     conversation_id = str(uuid.uuid4())
     conversation_dir = _resolve_conversation_dir(conversation_id)
     conversation_dir.mkdir(parents=True, exist_ok=False)
-    _write_conversation_title(conversation_dir, _DEFAULT_CONVERSATION_TITLE)
+    _write_conversation_title(conversation_dir, settings.default_conversation_title)
     payload = _serialize_conversation(conversation_dir)
     payload["messages"] = []
     return payload
@@ -815,7 +813,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
     selected_artifacts = _resolve_selected_artifacts(conversation_id, effective_artifact_paths)
     selected_inputs = (selected_artifacts + uploaded_files) if message_named_artifact_paths else (uploaded_files + selected_artifacts)
     current_title = _read_conversation_title(conversation_workdir)
-    if current_title == _DEFAULT_CONVERSATION_TITLE:
+    if current_title == settings.default_conversation_title:
         _write_conversation_title(conversation_workdir, req.message)
 
     # Build input state
@@ -901,7 +899,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                             "message": update.get("message", ""),
                         })
                         last_heartbeat_at = time.perf_counter()
-                    if current_tool_name and time.perf_counter() - last_heartbeat_at >= _HEARTBEAT_INTERVAL:
+                    if current_tool_name and time.perf_counter() - last_heartbeat_at >= settings.agent_heartbeat_interval_sec:
                         yield _sse_event("heartbeat", {
                             "name": current_tool_name,
                             "label": _format_tool_label(current_tool_name),

@@ -19,6 +19,29 @@ _WEAK_API_KEYS = {
     "test-api-key",
     "password",
     "123456",
+    "admin",
+    "admin123",
+    "root",
+    "root123",
+    "secret",
+    "secret123",
+    "api_key",
+    "api_key123",
+    "apikey",
+    "apikey123",
+    "qwerty",
+    "qwerty123",
+    "letmein",
+    "welcome",
+    "welcome123",
+    "monkey",
+    "dragon",
+    "master",
+    "login",
+    "abc123",
+    "abcd1234",
+    "test",
+    "test123",
 }
 
 
@@ -107,6 +130,11 @@ class Settings(BaseSettings):
     # --- Caching ---
     storage_scan_cache_ttl_sec: int = 30
     conversation_stats_cache_ttl_sec: int = 30
+
+    # --- Agent ---
+    agent_heartbeat_interval_sec: float = 5.0
+    default_conversation_title: str = "新会话"
+    max_conversation_title_length: int = 48
 
     @property
     def upload_dir(self) -> Path:
