@@ -245,15 +245,16 @@ class FileService:
             except Exception:
                 await self.session.rollback()
                 logger.warning("Failed to sync upload records after LRU trim", exc_info=True)
-        if storage.dir_size_bytes() > storage.storage_limit_bytes():
+        # Validate size
+        max_bytes = settings.max_upload_size_mb * 1024 * 1024
+        size_bytes = temp_path.stat().st_size
+        storage_limit = storage.storage_limit_bytes()
+        if storage.dir_size_bytes() + size_bytes > storage_limit:
             raise PDFAgentError(
                 ErrorCode.STORAGE_LIMIT_EXCEEDED,
                 f"Storage exceeds configured limit of {settings.max_storage_gb}GB",
             )
 
-        # Validate size
-        max_bytes = settings.max_upload_size_mb * 1024 * 1024
-        size_bytes = temp_path.stat().st_size
         if size_bytes > max_bytes:
             raise PDFAgentError(ErrorCode.FILE_TOO_LARGE, f"File exceeds {settings.max_upload_size_mb}MB limit")
 

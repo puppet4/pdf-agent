@@ -22,9 +22,9 @@ class TestCoreSurfaceSmoke:
         assert "/api/conversations/{conversation_id}" in paths
         assert "/api/conversations/{conversation_id}/messages" in paths
         assert "/api/conversations/{conversation_id}/artifacts" in paths
-        assert "/api/tools" in paths
-        assert "/api/executions" in paths
-        assert "/api/workflows" in paths
+        assert "/api/tools" not in paths
+        assert "/api/executions" not in paths
+        assert "/api/workflows" not in paths
         assert "/" not in paths
 
     def test_healthz_returns_200_with_mock_db(self):
@@ -80,32 +80,40 @@ class TestCoreSurfaceSmoke:
         assert app.redoc_url is None
         assert app.openapi_url is None
 
-    def test_legacy_http_routes_are_bridged_with_deprecation(self):
+    def test_legacy_http_routes_are_absent_by_default(self):
         from pdf_agent.api.router import build_api_router
 
         paths = {route.path for route in build_api_router().routes if hasattr(route, "path")}
 
-        assert "/api/tools" in paths
-        assert "/api/executions" in paths
-        assert "/api/workflows" in paths
+        assert "/api/tools" not in paths
+        assert "/api/executions" not in paths
+        assert "/api/workflows" not in paths
         assert "/api/conversations" in paths
         assert "/api/conversations/{conversation_id}/messages" in paths
 
-        from pdf_agent.main import app
+    def test_legacy_http_routes_can_be_enabled_as_deprecated_bridge(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from pdf_agent.api.router import build_api_router
         from pdf_agent.config import settings
 
-        client = TestClient(app)
-        tools_response = client.get(
-            "/api/tools",
-            headers={settings.api_key_header_name: settings.auth_policy.api_key or ""},
-        )
+        monkeypatch.setattr(settings, "legacy_api_compatibility_mode", "bridge")
+        monkeypatch.setattr(settings, "legacy_api_phase", "deprecation")
+        bridge_app = FastAPI()
+        bridge_app.include_router(build_api_router())
+
+        paths = {route.path for route in bridge_app.routes if hasattr(route, "path")}
+        assert "/api/tools" in paths
+        assert "/api/executions" in paths
+        assert "/api/workflows" in paths
+
+        client = TestClient(bridge_app)
+        tools_response = client.get("/api/tools")
         assert tools_response.status_code == 200
         assert tools_response.headers.get("Deprecation") == "true"
 
-        executions_response = client.get(
-            "/api/executions",
-            headers={settings.api_key_header_name: settings.auth_policy.api_key or ""},
-        )
+        executions_response = client.get("/api/executions")
         assert executions_response.status_code == 200
         assert executions_response.headers.get("X-Legacy-Phase") in {"deprecation", "warning"}
         assert executions_response.headers.get("X-Replacement-Endpoint") == "/api/conversations?page=1&limit=20"

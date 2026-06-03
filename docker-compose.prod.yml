@@ -20,9 +20,14 @@ services:
       PDF_AGENT_OPENAI_BASE_URL: ${PDF_AGENT_OPENAI_BASE_URL:-}
       PDF_AGENT_OPENAI_MODEL: ${PDF_AGENT_OPENAI_MODEL:-gpt-4o}
       PDF_AGENT_DATA_DIR: /app/data
+      PDF_AGENT_ENVIRONMENT: production
       PDF_AGENT_DEBUG: "false"
       # Access control
+      PDF_AGENT_AUTH_MODE: required
       PDF_AGENT_API_KEY: ${PDF_AGENT_API_KEY:-}
+      # Legacy API bridge is disabled by default for the chat-first release surface
+      PDF_AGENT_LEGACY_API_COMPATIBILITY_MODE: ${PDF_AGENT_LEGACY_API_COMPATIBILITY_MODE:-disabled}
+      PDF_AGENT_LEGACY_API_PHASE: ${PDF_AGENT_LEGACY_API_PHASE:-sunset}
       # CORS — restrict to your domain(s)
       PDF_AGENT_CORS_ORIGINS: ${PDF_AGENT_CORS_ORIGINS:-https://yourdomain.com}
       # Rate limiting

@@ -54,10 +54,10 @@ ENV PYTHONDONTWRITEBYTECODE=1
 USER pdfagent
 EXPOSE 8000
 
-# Production: multiple workers, no reload
+# Production: single-process runtime, no reload
 CMD ["uvicorn", "pdf_agent.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "2", \
+     "--workers", "1", \
      "--log-level", "warning", \
      "--access-log"]

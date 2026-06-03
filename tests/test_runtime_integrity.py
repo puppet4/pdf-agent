@@ -14,9 +14,10 @@ from fastapi import HTTPException
 
 from pdf_agent.agent import tools_adapter
 from pdf_agent.api.files import delete_file
-from pdf_agent.api.agent import _load_conversation_messages
+from pdf_agent.api.agent import _load_conversation_messages, _load_conversation_stats
 from pdf_agent.api.middleware import _load_rate_limit_state
 from pdf_agent.api.metrics import _Metrics
+from pdf_agent.core import ErrorCode, PDFAgentError
 from pdf_agent.db.models import FileRecord
 from pdf_agent.schemas.tool import ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.services import FilePersistenceError, FileService
@@ -107,7 +108,8 @@ async def test_upload_from_path_removes_files_when_metadata_commit_fails(
     from pdf_agent.config import settings
     from pdf_agent import services as services_module
 
-    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(
         services_module.storage,
         "trim_storage_lru_details",
@@ -126,6 +128,37 @@ async def test_upload_from_path_removes_files_when_metadata_commit_fails(
 
     assert session.rolled_back is True
     assert not settings.upload_dir.exists() or not any(settings.upload_dir.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_upload_from_path_rejects_upload_that_would_exceed_storage_limit(
+    tmp_path,
+    sample_images,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from pdf_agent.config import settings
+    from pdf_agent import services as services_module
+
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "max_storage_gb", 0)
+    monkeypatch.setattr(
+        services_module.storage,
+        "trim_storage_lru_details",
+        lambda **kwargs: StorageTrimResult(),
+    )
+
+    service = FileService(_FailingCommitSession())
+
+    with pytest.raises(PDFAgentError) as exc_info:
+        await service.upload_from_path(
+            filename="sample.png",
+            content_type="image/png",
+            temp_path=sample_images[0],
+        )
+
+    assert exc_info.value.code == ErrorCode.STORAGE_LIMIT_EXCEEDED
+    assert not settings.upload_dir.exists()
 
 
 def test_redact_returns_explicit_warning_when_ghostscript_is_unavailable(
@@ -230,6 +263,18 @@ def test_rate_limit_state_fail_opens_when_json_file_is_corrupted(tmp_path, monke
     (tmp_path / "rate_limit.json").write_text("{not-json", encoding="utf-8")
 
     assert _load_rate_limit_state() == {}
+
+
+def test_conversation_stats_cache_preserves_conversation_directory_mtime(tmp_path: Path):
+    conversation_dir = tmp_path / "conversation-1"
+    step_dir = conversation_dir / "step_0"
+    step_dir.mkdir(parents=True)
+    (step_dir / "result.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    before_mtime_ns = conversation_dir.stat().st_mtime_ns
+
+    assert _load_conversation_stats(conversation_dir) == (1, 1)
+
+    assert conversation_dir.stat().st_mtime_ns == before_mtime_ns
 
 
 @pytest.mark.asyncio

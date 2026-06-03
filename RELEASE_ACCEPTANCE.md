@@ -9,6 +9,7 @@ Verify the current chat-first PDF Agent is ready to use as a stable baseline.
 - start from a clean working tree
 - use the current project-local git identity
 - ensure dependencies are installed
+- if API key auth is enabled, set the same key for backend requests and frontend `VITE_API_KEY`
 
 ## 0. Baseline Check
 
@@ -43,6 +44,7 @@ Expected:
 - API starts successfully
 - no immediate runtime or import errors
 - `/healthz` returns healthy or at least structured status output
+- legacy bridge is disabled by default unless explicitly enabled for a migration window
 
 ## 2. Upload Flow
 
@@ -118,6 +120,7 @@ Release is acceptable if:
 - no visible legacy manual-operation style product navigation remains in the active UI
 - the main landing surface is chat-first
 - legacy manual-operation HTTP entrypoints are gone from the active service surface
+- deprecated legacy bridge endpoints are only acceptable when explicitly enabled for migration testing
 - no blocking runtime error appears in logs
 
 ## Notes

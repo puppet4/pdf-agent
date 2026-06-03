@@ -45,3 +45,17 @@ def test_validate_runtime_rejects_short_api_key():
 
     with pytest.raises(ValueError, match="too short"):
         cfg.validate_runtime()
+
+
+def test_default_release_surface_is_chat_first_without_legacy_bridge():
+    cfg = Settings(_env_file=None)
+
+    assert cfg.legacy_api_compatibility_mode == "disabled"
+    assert cfg.legacy_api_phase == "sunset"
+
+
+def test_metrics_is_exempt_from_api_key_by_default():
+    cfg = Settings(_env_file=None)
+
+    assert "/healthz" in cfg.auth_exempt_path_set
+    assert "/metrics" in cfg.auth_exempt_path_set

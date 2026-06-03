@@ -3,8 +3,8 @@
 ## Current Status
 
 - Runtime architecture is frozen on `FastAPI + LangChain/LangGraph + local storage`.
-- Product surface is conversation-first and no longer exposes legacy manual-operation HTTP entrypoints.
-- Reduced smoke-oriented suite is green: `16 passed`.
+- Product surface is conversation-first; legacy manual-operation HTTP entrypoints are disabled by default and only available through an explicit deprecated bridge.
+- Full verification must include runtime tool dependencies, current conversation SSE acceptance, frontend lint/build, and compose smoke checks.
 
 ## Recommended Commit Split
 
@@ -14,6 +14,7 @@ Scope:
 - Remove legacy queue/worker/runtime layers
 - Keep the chat-first conversation flow stable
 - Align health, cleanup, and storage behavior to the simplified single-process model
+- Keep `/healthz` and `/metrics` aligned with the documented auth exemption policy
 
 Primary files:
 - `src/pdf_agent/external_commands.py`
@@ -67,7 +68,7 @@ Optional to include in the same commit if desired:
 
 Scope:
 - Collapse the product surface into conversation-first PDF editing
-- Remove legacy manual-operation HTTP entrypoints
+- Disable legacy manual-operation HTTP entrypoints by default
 - Freeze the design doc on the final target architecture
 - Keep only smoke-oriented tests plus key runtime acceptance coverage
 
@@ -92,13 +93,13 @@ PYTHONPATH=src .venv/bin/python -m pytest tests -q
 ```
 
 Expected current result:
-- `PYTHONPATH=src .venv/bin/python -m pytest tests -q` -> `16 passed`
+- all focused backend/runtime contract tests pass
+- frontend lint/build pass
+- full backend test suite either passes or clearly reports external-tool dependency gaps
 
 ## Git Risks To Check Manually
 
-- `git status --short` currently shows historical `AD` entries for `src/pdf_agent/api/jobs.py` and `tests/test_jobs_api.py`.
-- Those files do not exist in the working tree anymore.
-- Before committing, review the index carefully so these legacy paths land as clean deletions rather than confusing staged add/delete artifacts.
+- Confirm `git status --short` is clean or only contains intentional release-closure changes before committing.
 
 ## Manual Acceptance Checklist
 
