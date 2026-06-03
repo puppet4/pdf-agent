@@ -16,12 +16,25 @@ npm run dev
 ```
 
 默认通过 `frontend/src/services/config.js` 中的 API 基地址访问后端。
+如果后端启用了 API key 鉴权，可通过 `VITE_API_KEY` 注入：
+
+```bash
+VITE_API_KEY=your-api-key npm run dev
+```
+
+也可以在浏览器控制台设置：
+
+```js
+localStorage.setItem('pdf_agent_api_key', 'your-api-key')
+```
 
 ## 构建
 
 ```bash
 npm run build
 ```
+
+生产部署时，将 `dist/` 发布到 nginx 的 `/var/www/pdf-agent`，并让 nginx 反代 `/api/`、`/healthz` 和 `/metrics` 到后端服务。
 
 ## 约束
 

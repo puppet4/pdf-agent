@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     auth_mode: Literal["required", "optional", "disabled"] = "required"
     api_key: str = _UNSET_API_KEY
     api_key_header_name: str = "X-API-Key"
-    exempt_auth_paths: str = "/healthz"
+    exempt_auth_paths: str = "/healthz,/metrics"
     min_api_key_length: int = 24
 
     # --- CORS ---
@@ -100,8 +100,8 @@ class Settings(BaseSettings):
     default_locale: str = "en"
 
     # --- Compatibility ---
-    legacy_api_compatibility_mode: Literal["disabled", "bridge"] = "bridge"
-    legacy_api_phase: Literal["deprecation", "warning", "sunset"] = "deprecation"
+    legacy_api_compatibility_mode: Literal["disabled", "bridge"] = "disabled"
+    legacy_api_phase: Literal["deprecation", "warning", "sunset"] = "sunset"
     legacy_api_sunset_date: str = "2026-12-31"
     legacy_api_migration_url: str = "/docs/migrations/legacy-api"
 

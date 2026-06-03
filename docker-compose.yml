@@ -12,6 +12,10 @@ services:
       PDF_AGENT_OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       PDF_AGENT_OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
       PDF_AGENT_DATA_DIR: /app/data
+      PDF_AGENT_AUTH_MODE: ${PDF_AGENT_AUTH_MODE:-optional}
+      PDF_AGENT_API_KEY: ${PDF_AGENT_API_KEY:-}
+      PDF_AGENT_LEGACY_API_COMPATIBILITY_MODE: ${PDF_AGENT_LEGACY_API_COMPATIBILITY_MODE:-disabled}
+      PDF_AGENT_LEGACY_API_PHASE: ${PDF_AGENT_LEGACY_API_PHASE:-sunset}
     volumes:
       - app_data:/app/data
     depends_on:

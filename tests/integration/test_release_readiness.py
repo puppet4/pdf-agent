@@ -18,7 +18,8 @@ def auth_headers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, s
     monkeypatch.setattr(settings, "api_key", "integration-release-key-1234567890")
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "disable_agent_persistence", True)
-    monkeypatch.setattr(settings, "legacy_api_phase", "deprecation")
+    monkeypatch.setattr(settings, "legacy_api_compatibility_mode", "disabled")
+    monkeypatch.setattr(settings, "legacy_api_phase", "sunset")
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     settings.ensure_dirs()
     return {settings.api_key_header_name: settings.auth_policy.api_key or ""}
@@ -116,13 +117,7 @@ def test_checkpointer_unavailable_degrades_to_history(
     assert payload["messages"][0]["content"] == "hi"
 
 
-def test_legacy_endpoints_expose_migration_prompt(client: TestClient, auth_headers: dict[str, str]):
+def test_legacy_endpoints_are_absent_from_default_release_surface(client: TestClient, auth_headers: dict[str, str]):
     response = client.get("/api/executions?page=1&limit=5", headers=auth_headers)
 
-    assert response.status_code == 200
-    assert response.headers.get("Deprecation") == "true"
-    assert response.headers.get("X-Replacement-Endpoint") == "/api/conversations?page=1&limit=20"
-    payload = response.json()
-    assert payload["deprecated"] is True
-    assert payload["phase"] in {"deprecation", "warning"}
-    assert "migration_url" in payload
+    assert response.status_code == 404

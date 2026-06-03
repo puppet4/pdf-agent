@@ -138,6 +138,8 @@ def test_auto_rotate_skips_pages_with_too_few_characters(
         return 90, 8.0
 
     monkeypatch.setattr(auto_rotate_module, "_detect_rotation", fake_detect_rotation)
+    monkeypatch.setattr(auto_rotate_module, "_detect_rotation_from_pdf_text", lambda *_args, **_kwargs: (0, None))
+    monkeypatch.setattr(auto_rotate_module, "_detect_rotation_with_ocr_fallback", lambda _image_path: (0, None))
 
     result = AutoRotateTool().run(
         [sample_pdf],
@@ -149,6 +151,64 @@ def test_auto_rotate_skips_pages_with_too_few_characters(
     assert result.meta["total_pages"] == 5
     assert result.meta["rotations"]
     assert result.meta["rotations"][0]["page"] == 2
+
+
+def test_auto_rotate_uses_ocr_fallback_when_osd_cannot_detect_orientation(
+    sample_pdf: Path,
+    sample_images: list[Path],
+    workdir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(auto_rotate_module.shutil, "which", lambda _name: "/usr/bin/fake")
+    monkeypatch.setattr(auto_rotate_module, "_render_page_png", lambda *_args, **_kwargs: sample_images[0])
+    monkeypatch.setattr(
+        auto_rotate_module,
+        "_detect_rotation",
+        lambda _image_path: (_ for _ in ()).throw(
+            ToolError(ErrorCode.ENGINE_EXEC_FAILED, "Too few characters. Skipping this page")
+        ),
+    )
+    monkeypatch.setattr(auto_rotate_module, "_detect_rotation_from_pdf_text", lambda *_args, **_kwargs: (0, None))
+    monkeypatch.setattr(auto_rotate_module, "_detect_rotation_with_ocr_fallback", lambda _image_path: (90, 8.0))
+
+    result = AutoRotateTool().run(
+        [sample_pdf],
+        {"min_confidence": 2},
+        _tool_dir(workdir, "auto_rotate_fallback"),
+    )
+
+    assert result.output_files[0].exists()
+    assert result.meta["total_pages"] == 5
+    assert result.meta["skipped_pages"] == []
+    assert len(result.meta["rotations"]) == 5
+    assert result.meta["rotations"][0]["page"] == 1
+    assert result.meta["rotations"][0]["angle"] == 90
+
+
+def test_auto_rotate_uses_pdf_text_fallback_when_osd_cannot_detect_orientation(
+    rotated_text_pdf: Path,
+    workdir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        auto_rotate_module,
+        "_detect_rotation",
+        lambda _image_path: (_ for _ in ()).throw(
+            ToolError(ErrorCode.ENGINE_EXEC_FAILED, "Too few characters. Skipping this page")
+        ),
+    )
+    monkeypatch.setattr(auto_rotate_module, "_detect_rotation_with_ocr_fallback", lambda _image_path: (0, None))
+
+    result = AutoRotateTool().run(
+        [rotated_text_pdf],
+        {"min_confidence": 2},
+        _tool_dir(workdir, "auto_rotate_pdf_text_fallback"),
+    )
+
+    assert result.output_files[0].exists()
+    assert result.meta["skipped_pages"] == []
+    assert result.meta["rotations"]
+    assert result.meta["rotations"][0]["page"] == 1
 
 
 def test_auto_rotate_respects_high_min_confidence_threshold(

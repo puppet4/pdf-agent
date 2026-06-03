@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass
 import json
 import logging
+import os
 import queue
 import re
 import shutil
@@ -432,7 +433,12 @@ def _load_conversation_stats(conversation_dir: Path) -> tuple[int, int]:
         "artifact_count": artifact_count,
     }
     try:
+        conversation_stat = conversation_dir.stat()
         stats_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.utime(
+            conversation_dir,
+            ns=(conversation_stat.st_atime_ns, conversation_stat.st_mtime_ns),
+        )
     except OSError:
         logger.debug("Conversation stats cache write failed for %s", conversation_dir, exc_info=True)
     return step_count, artifact_count
