@@ -16,12 +16,18 @@ const CopyIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="non
 const EditIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"></path></svg>;
 const RetryIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"></polyline><polyline points="23 20 23 14 17 14"></polyline><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10"></path><path d="M3.51 15A9 9 0 0 0 18.36 18.36L23 14"></path></svg>;
 const StopIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5"></rect></svg>;
+const BrandMark = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>;
+const AssistantMark = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="9" y1="13" x2="15" y2="13"></line><line x1="9" y1="17" x2="13" y2="17"></line></svg>;
+const MergeIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="13" height="13" rx="2"></rect><path d="M21 8v11a2 2 0 0 1-2 2H8"></path></svg>;
+const ExtractIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><path d="M12 18v-6"></path><path d="m9 15 3 3 3-3"></path></svg>;
+const OcrIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"></path><path d="M17 3h2a2 2 0 0 1 2 2v2"></path><path d="M21 17v2a2 2 0 0 1-2 2h-2"></path><path d="M7 21H5a2 2 0 0 1-2-2v-2"></path><line x1="8" y1="12" x2="16" y2="12"></line></svg>;
+const CompressIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>;
 
 const PROMPT_PRESETS = [
-  "把选中的 PDF 合并成一个文件",
-  "提取第一页到第三页",
-  "给文件添加 OCR 文字层",
-  "压缩文件体积"
+  { icon: MergeIcon, text: "把选中的 PDF 合并成一个文件" },
+  { icon: ExtractIcon, text: "提取第一页到第三页" },
+  { icon: OcrIcon, text: "给文件添加 OCR 文字层" },
+  { icon: CompressIcon, text: "压缩文件体积" }
 ];
 
 const FILE_ONLY_PROMPT = "请先查看我这次选中的文件，并准备按我的下一步要求处理。";
@@ -871,6 +877,10 @@ function App() {
       
       {/* Conversation Sidebar */}
       <aside className="conversation-sidebar">
+        <div className="sidebar-brand">
+          <span className="sidebar-brand-mark"><BrandMark /></span>
+          <span className="sidebar-brand-name">PDF 智能助手</span>
+        </div>
         <button className="new-chat-btn" onClick={startNewConversation}>
           <span>新建会话</span>
           <PlusIcon />
@@ -893,13 +903,15 @@ function App() {
               </button>
             </div>
           ))}
-          {conversations.length === 0 && <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: 10 }}>还没有会话</div>}
+          {conversations.length === 0 && <div className="sidebar-empty">还没有会话</div>}
         </div>
       </aside>
 
       {/* MAIN CHAT AREA */}
       <main className="chat-main">
-        <header className="chat-header">PDF 智能助手</header>
+        <header className="chat-header">
+          {normalizeConversationTitle(conversations.find((conv) => conv.id === currentConversationId)?.title) || "新对话"}
+        </header>
         
         {surfaceError && (
           <div className="surface-error">
@@ -913,11 +925,15 @@ function App() {
               <h2>今天想怎么处理你的 PDF？</h2>
               <p>先用下方回形针上传文件，然后直接告诉我你的需求。例如：</p>
               <div className="preset-grid">
-                {PROMPT_PRESETS.map((preset, idx) => (
-                  <button key={idx} className="preset-card" onClick={() => setDraftMessage(preset)}>
-                    {preset}
-                  </button>
-                ))}
+                {PROMPT_PRESETS.map((preset, idx) => {
+                  const PresetIcon = preset.icon;
+                  return (
+                    <button key={idx} className="preset-card" onClick={() => setDraftMessage(preset.text)}>
+                      <span className="preset-card-icon"><PresetIcon /></span>
+                      <span>{preset.text}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ) : (
@@ -926,7 +942,7 @@ function App() {
                 {msg.kind === 'step' ? (
                   <div className="message-wrapper assistant step">
                     <div className="message-content">
-                      <div className="avatar assistant">AI</div>
+                      <div className="avatar assistant"><AssistantMark /></div>
                       <div className="message-column">
                         <MessageCard message={msg} />
                       </div>
@@ -937,7 +953,7 @@ function App() {
                     <div className="message-content">
                       {msg.kind !== 'user' && (
                         <div className={`avatar ${msg.kind}`}>
-                          AI
+                          <AssistantMark />
                         </div>
                       )}
                       <div className="message-column">
@@ -1001,7 +1017,7 @@ function App() {
           {isThinking && (
             <div className="message-wrapper assistant thinking">
               <div className="message-content">
-                <div className="avatar assistant">AI</div>
+                <div className="avatar assistant"><AssistantMark /></div>
                 <div className="message-body">
                   <div className="thinking-bubble">
                     <span className="thinking-label">正在思考</span>
@@ -1107,17 +1123,14 @@ function App() {
                 </button>
               )}
             </div>
-              <div className="input-hint">
-                已选中的原始文件和结果文件都会保留在当前会话中，直到手动移除。处理结果如需继续使用，请在“结果文件”里点“用作输入”。
-              </div>
               {editingMessageId && (
                 <div className="edit-banner">
                   <span>正在编辑之前的用户消息，发送后会按新一轮消息提交。</span>
                   <button className="edit-banner-btn" onClick={cancelEditing}>取消编辑</button>
                 </div>
               )}
-	            <div className="disclaimer">
-	              PDF 智能助手会使用本地工具处理文件，尽量保证安全与隐私。
+	            <div className="input-hint">
+	              已选文件会保留在当前会话；结果文件可点"用作输入"继续处理。文件均在本地工具处理。
 	            </div>
           </div>
         </div>
