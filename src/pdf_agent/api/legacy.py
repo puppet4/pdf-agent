@@ -100,7 +100,7 @@ def _serialize_legacy_execution(conversation_dir) -> dict:
 def _list_legacy_execution_items(page: int, limit: int) -> tuple[list[dict], int, int, int]:
     conversations_dir = settings.conversations_dir
     if not conversations_dir.exists():
-        return ([], 0, page, limit)
+        return [], 0, page, limit
 
     entries = []
     for conversation_dir in conversations_dir.iterdir():
@@ -117,7 +117,7 @@ def _list_legacy_execution_items(page: int, limit: int) -> tuple[list[dict], int
     limit = max(1, min(int(limit), 200))
     start = (page - 1) * limit
     end = start + limit
-    return (entries[start:end], total, page, limit)
+    return entries[start:end], total, page, limit
 
 
 def _validate_legacy_conversation_id(candidate: str) -> str:

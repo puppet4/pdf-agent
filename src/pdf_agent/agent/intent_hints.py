@@ -101,7 +101,7 @@ def _infer_total_pages(selected_inputs: list[FileInfo]) -> int | None:
 
 def _detect_preferred_tool(text: str) -> str | None:
     ordered_rules = [
-        ("split", ["拆分", "拆开", "分成", "拆成", "分拆", "拆为"]),
+        ("split", ["拆分", "拆开", "拆出来", "分成", "拆成", "分拆", "拆为"]),
         ("merge", ["合并", "拼接", "合成一个"]),
         ("compress", ["压缩", "缩小", "减小体积", "变小一点"]),
         ("rotate", ["旋转", "转正", "顺时针", "逆时针", "左转", "右转", "横过来", "倒过来"]),
@@ -111,9 +111,9 @@ def _detect_preferred_tool(text: str) -> str | None:
         ("delete", ["删除", "删掉", "去掉"]),
         ("extract", ["提取", "抽取"]),
         ("ocr", ["ocr", "文字识别", "识别文字", "扫描件转文字"]),
-        ("metadata_info", ["元数据", "基本信息", "文档信息"]),
         ("remove_metadata", ["删除元数据", "清除元数据"]),
         ("set_metadata", ["修改元数据", "设置作者", "设置标题"]),
+        ("metadata_info", ["元数据", "基本信息", "文档信息"]),
         ("pdf_to_word", ["转word", "转成word", "导出word"]),
         ("pdf_to_excel", ["转excel", "转成excel", "导出excel"]),
         ("pdf_to_ppt", ["转ppt", "转成ppt", "导出ppt"]),
@@ -130,7 +130,7 @@ def _detect_preferred_tool(text: str) -> str | None:
 
 
 def _build_split_hints(text: str, total_pages: int | None) -> list[str]:
-    if not any(keyword in text for keyword in ("拆分", "拆开", "分成", "拆成", "分拆", "拆为")):
+    if not any(keyword in text for keyword in ("拆分", "拆开", "拆出来", "分成", "拆成", "分拆", "拆为")):
         return []
 
     hints = ["- preferred_tool: split"]

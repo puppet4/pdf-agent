@@ -372,8 +372,8 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
         parts = []
         if result.log:
             parts.append(result.log)
-        if result.meta:
-            parts.append(f"Metadata: {json.dumps(result.meta, ensure_ascii=False, default=str)}")
+        if safe_meta:
+            parts.append(f"Metadata: {json.dumps(safe_meta, ensure_ascii=False, default=str)}")
         parts.append(f"Result JSON: {json.dumps(payload, ensure_ascii=False, default=str)}")
 
         result_str = "\n".join(parts) if parts else "Done (no output)."
