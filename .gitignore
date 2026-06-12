@@ -5,9 +5,12 @@ __pycache__/
 dist/
 build/
 *.egg
+.coverage
+htmlcov/
 
 # Virtual env
 .venv/
+.uv-cache/
 
 # IDE
 .idea/

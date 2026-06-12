@@ -34,3 +34,21 @@ def test_production_dockerfile_keeps_single_process_runtime_default():
 
     assert '"--workers", "2"' not in dockerfile
     assert '"--workers", "1"' in dockerfile
+
+
+def test_browser_qa_runner_executes_the_full_playwright_suite_by_default():
+    script = Path("qa/browser-e2e/run_local_matrix.sh").read_text(encoding="utf-8")
+
+    assert 'PLAYWRIGHT_ARGS=("tests/tool-matrix.spec.mjs")' not in script
+    assert './node_modules/.bin/playwright test "${PLAYWRIGHT_ARGS[@]}"' in script
+    assert "uv run python qa/browser-e2e/support/build_fixtures.py" not in script
+
+
+def test_quality_gate_defaults_to_functional_automation_not_coverage_chasing():
+    script = Path("scripts/quality_gate.sh").read_text(encoding="utf-8")
+    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+
+    assert 'TEST_PROFILE="${PDF_AGENT_TEST_PROFILE:-functional}"' in script
+    assert 'coverage_edges: high-coverage branch tests' in pyproject
+    assert 'PYTEST_MARK_EXPR="not external_tools and not coverage_edges"' in script
+    assert 'PDF_AGENT_TEST_PROFILE=coverage' in script
