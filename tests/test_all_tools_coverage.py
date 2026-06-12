@@ -508,6 +508,7 @@ class TestAllBuiltinsCoverage:
         assert compare_result.output_files[0].suffix == ".pdf"
         assert compare_result.output_files[1].suffix == ".json"
 
+    @pytest.mark.external_tools
     @pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed")
     def test_ocr_tool(self, scanned_pdf: Path, workdir: Path):
         ocr_result = OcrTool().run(
@@ -517,6 +518,7 @@ class TestAllBuiltinsCoverage:
         )
         _assert_outputs_exist(ocr_result)
 
+    @pytest.mark.external_tools
     @pytest.mark.parametrize("fixture_name", ["sample_docx", "sample_xlsx", "sample_pptx"])
     def test_office_to_pdf_tool(self, fixture_name: str, workdir: Path, request: pytest.FixtureRequest):
         sample_file = request.getfixturevalue(fixture_name)
@@ -533,6 +535,7 @@ class TestAllBuiltinsCoverage:
             assert result.meta["fallback_reason"]
         assert "转PDF" in result.output_files[0].name
 
+    @pytest.mark.external_tools
     @pytest.mark.parametrize(
         ("tool_cls", "suffix", "loader", "fallback_engine"),
         [
