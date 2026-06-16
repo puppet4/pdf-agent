@@ -86,6 +86,11 @@ def _validate_declared_content(content: bytes, declared_mime: str) -> bool:
 
 
 def _validate_declared_content_path(path: Path, declared_mime: str) -> bool:
+    """直接基于磁盘文件做内容校验。
+
+    上传接口最终走的是临时文件路径而不是整块 bytes，因此这里提供一个按路径校验的版本，
+    避免为了魔数检查再把整个大文件重新读进内存。
+    """
     if declared_mime == "image/webp":
         with path.open("rb") as fh:
             header = fh.read(16)
@@ -204,6 +209,7 @@ def list_storage_records() -> list[FileRecord]:
         record = load_storage_record(file_id)
         if record is not None:
             records.append(record)
+    # 统一按创建时间倒序返回，尽量和数据库查询路径保持一致。
     records.sort(key=lambda item: item.created_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return records
 
@@ -263,6 +269,7 @@ class FileService:
         trim_result = storage.trim_storage_lru_details(include_conversations=False, include_uploads=True)
         if trim_result.removed_upload_ids:
             try:
+                # 先同步清理已被磁盘裁掉的旧记录，避免上传前数据库和磁盘状态继续漂移。
                 await self._cleanup_removed_upload_records(trim_result.removed_upload_ids)
             except Exception:
                 await self.session.rollback()
@@ -291,6 +298,7 @@ class FileService:
         page_count = None
         if content_type == "application/pdf":
             try:
+                # 正式落盘前先试开 PDF，既能读取页数，也能把明显损坏的文件挡在上传目录之外。
                 with pikepdf.open(temp_path) as pdf:
                     page_count = len(pdf.pages)
                     if page_count > settings.max_page_count:
@@ -305,6 +313,7 @@ class FileService:
             except PDFAgentError:
                 raise
             except Exception as exc:
+                # 非密码异常都视为 PDF 已损坏或不可读，避免把坏文件继续写入正式目录。
                 raise PDFAgentError(
                     ErrorCode.UNSUPPORTED_FORMAT,
                     "PDF is corrupt or unreadable",
@@ -312,6 +321,8 @@ class FileService:
 
         path = storage.save_upload_from_path(file_id, filename, temp_path)
         sha256 = storage.compute_sha256_file(path)
+        # 只有文件已经稳定写入正式目录后，才开始生成缩略图和写数据库元数据。
+        # 这样即使后续数据库提交失败，磁盘上也已经保留了主文件，便于降级读取和排障。
 
         # 缩略图生成失败不会阻断上传成功，只影响预览能力。
         thumb_path = path.parent / "thumbnail.jpg"
@@ -334,6 +345,7 @@ class FileService:
             await self.session.commit()
             await self.session.refresh(record)
         except Exception:
+            # 这里最怕“磁盘写成功但数据库失败”，所以异常时必须反向删掉刚落盘的目录。
             try:
                 await self.session.rollback()
             except Exception:
@@ -391,8 +403,10 @@ class FileService:
             logger.warning("Database read failed for file %s; falling back to filesystem lookup", file_id, exc_info=True)
             record = None
         if record is None:
+            # 当数据库记录缺失但磁盘文件还在时，允许按文件系统重建临时视图继续服务读取。
             record = load_storage_record(file_id)
         if record is None:
+            # 只有数据库和磁盘两边都找不到时，才真正向上抛“文件不存在”。
             raise PDFAgentError(ErrorCode.FILE_NOT_FOUND, f"File {file_id} not found")
         return record
 

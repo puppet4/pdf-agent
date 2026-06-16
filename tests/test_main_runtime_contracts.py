@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import uuid
 
 import pytest
+from psycopg.rows import dict_row
 
 from pdf_agent import main
 from pdf_agent.config import settings
@@ -638,6 +639,78 @@ async def test_lifespan_successful_persistence_cleans_checkpoints_reconciles_and
         assert app.state.pool is not None
 
     assert closed_pools and closed_pools[-1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_lifespan_persistence_pool_uses_langgraph_compatible_connection_settings(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "disable_agent_persistence", False)
+    monkeypatch.setattr(main, "validate_settings", lambda: None)
+    monkeypatch.setattr(main, "_setup_sentry", lambda: None)
+    monkeypatch.setattr(main, "_setup_langsmith", lambda: None)
+    monkeypatch.setattr(main, "_cleanup_expired_conversations_with_checkpointer", lambda *args, **kwargs: _async_value(0))
+    monkeypatch.setattr(main, "_cleanup_upload_records", lambda upload_ids: _async_value(0))
+    monkeypatch.setattr(main, "_reconcile_idempotency_drift", lambda: _async_value((0, 0)))
+
+    class _Storage:
+        def list_expired_conversations(self) -> list[str]:
+            return []
+
+        def cleanup_expired_uploads(self) -> list[str]:
+            return []
+
+        def trim_storage_lru_details(self) -> StorageTrimResult:
+            return StorageTrimResult()
+
+    captured: dict[str, object] = {}
+
+    class _Pool:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+            self.closed = False
+
+        async def open(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class _Saver:
+        def __init__(self, pool) -> None:
+            self.pool = pool
+
+        async def setup(self) -> None:
+            return None
+
+    import langgraph.checkpoint.postgres.aio as postgres_module
+    import pdf_agent.agent.graph as graph_module
+    import pdf_agent.storage as storage_module
+
+    monkeypatch.setattr(storage_module, "storage", _Storage())
+    monkeypatch.setattr(main, "AsyncConnectionPool", _Pool)
+    monkeypatch.setattr(postgres_module, "AsyncPostgresSaver", _Saver)
+    monkeypatch.setattr(graph_module, "build_graph", lambda checkpointer, _registry: {"checkpointer": checkpointer})
+
+    async def neverending_cleanup(_app):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(main, "_cleanup_loop", neverending_cleanup)
+    app = SimpleNamespace(state=SimpleNamespace())
+
+    async with main.lifespan(app):
+        assert app.state.pool is not None
+
+    assert captured["conninfo"] == main._sync_database_url(settings.database_url)
+    assert captured["kwargs"] == {
+        "autocommit": True,
+        "prepare_threshold": 0,
+        "row_factory": dict_row,
+    }
+    assert captured["open"] is False
 
 
 async def _async_value(value):

@@ -575,6 +575,25 @@ async def test_create_message_streams_progress_heartbeat_selected_inputs_and_ide
 
 
 @pytest.mark.asyncio
+async def test_create_message_does_not_degrade_when_local_idempotency_setup_code_breaks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(graph=object())),
+        headers={"Idempotency-Key": "setup-bug"},
+    )
+
+    monkeypatch.setattr(agent_api, "build_request_hash", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("hash broke")))
+
+    with pytest.raises(RuntimeError, match="hash broke"):
+        await agent_api.create_message(
+            "conversation-setup-bug",
+            agent_api.MessageCreateRequest(message="hello"),
+            request,
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_message_stream_error_records_history_and_idempotency_failure_degradation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

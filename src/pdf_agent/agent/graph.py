@@ -97,6 +97,8 @@ def _make_agent_node(model_with_tools: ChatOpenAI):
             old_msgs = messages[:-4] if len(messages) > 4 else []
             recent_msgs = messages[-4:] if len(messages) > 4 else messages
             if old_msgs:
+                # 摘要策略很保守：只压缩较早消息，并且固定保留最近几轮原文，
+                # 这样工具调用前后的上下文还比较完整，不容易让模型“忘记刚刚做了什么”。
                 history_text = "\n".join(
                     f"{m.type}: {m.content[:200]}" for m in old_msgs if hasattr(m, "content") and isinstance(m.content, str)
                 )
@@ -111,9 +113,12 @@ def _make_agent_node(model_with_tools: ChatOpenAI):
                 except Exception:
                     messages = recent_msgs
 
+        # 只有真正发给模型前才注入系统提示词和本轮选中文件提示，
+        # 这样 checkpoint 里仍保留较干净的原始消息，不会反复累积这些运行时拼装内容。
         messages = [SystemMessage(content=sys_prompt)] + prepare_messages_for_model(messages)
 
         response = await model_with_tools.ainvoke(messages)
+        # 兼容不同 SDK 版本的 token 统计字段，尽量把模型消耗统一打到指标里。
         usage = getattr(response, "usage_metadata", None)
         if isinstance(usage, dict):
             input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
@@ -145,8 +150,12 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
     async def tool_node(state: AgentState) -> dict[str, Any]:
         last_msg: AIMessage = state["messages"][-1]
         if not last_msg.tool_calls:
+            # 没有工具调用时返回空更新，让图直接走条件边结束。
             return {}
 
+        # `new_messages` 回写到消息历史中；
+        # `new_files` 追加到会话文件清单；
+        # `latest_output_files` 用来刷新“下一步默认输入文件”。
         new_messages = []
         new_files: list[FileInfo] = []
         latest_output_files: list[str] = []
@@ -167,6 +176,7 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
 
             # 注入运行时状态字段，并直接调用底层协程。
             # 如果走 schema 校验，这些额外字段会被视为未知参数而被过滤掉。
+            # 这些字段属于运行时上下文，不应该成为模型“看得见、可猜测”的工具参数。
             tool_args["state"] = state
             tool_args["tool_call_id"] = call_id
 
@@ -175,6 +185,8 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
                 result_str = await lc_tool.coroutine(**tool_args)
                 parsed_result = parse_tool_result_payload(result_str)
             except Exception as e:
+                # 这里不直接抛异常，而是转成工具错误消息继续回到 agent，
+                # 让模型有机会解释失败原因或尝试别的工具。
                 logger.exception("Tool %s raised exception", tool_name)
                 result_str = f"Error: {e}"
 
@@ -195,6 +207,8 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
             # 从字符串协议中还原产物路径，并同步更新文件列表与当前激活文件集。
             output_files = parsed_result.output_files if parsed_result else []
             if output_files:
+                # 一次工具调用的输出会覆盖 current_files，表达“后续默认继续处理最新产物”。
+                # 如果一个回合里连跑多个工具，最后一次成功输出的文件会成为下一轮默认输入。
                 latest_output_files = output_files
                 for fp in output_files:
                     p = Path(fp)
@@ -216,8 +230,11 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
             "step_counter": step,
         }
         if new_files:
+            # files 是追加型 reducer，所以这里只传“新产生的文件”即可。
+            # 旧文件会由 reducer 自动保留；这里只补这一步新增加的部分，避免重复堆叠。
             update["files"] = new_files
         if latest_output_files:
+            # current_files 不是追加，而是替换；它表达“下一步默认处理哪些文件”。
             update["current_files"] = latest_output_files
 
         return update
@@ -272,6 +289,8 @@ def build_graph(
         model_kwargs["base_url"] = settings.openai_base_url
 
     llm = ChatOpenAI(**model_kwargs)
+    # 关闭 parallel_tool_calls，原因是工具会修改 current_files/step_counter 这类共享状态，
+    # 并行执行很容易把“下一步默认输入文件”搞乱。
     model_with_tools = llm.bind_tools(lc_tools, parallel_tool_calls=False)
 
     # 图结构保持极简，只保留 agent 与 tools 两个节点。

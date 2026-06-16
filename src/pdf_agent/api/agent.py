@@ -53,6 +53,13 @@ _content_disposition_headers = content_disposition_headers
 
 @dataclass(frozen=True)
 class ConversationMessagesLoadResult:
+    """描述一次会话历史加载的结果来源和状态。
+
+    这里显式区分 `checkpointer` 与 `history` 两种来源，原因是：
+    - 前者代表 LangGraph 持久化状态可用，历史最完整；
+    - 后者代表进入了降级路径，只能返回本地追加写入的消息记录。
+    """
+
     messages: list[dict]
     source: str
     status: str
@@ -116,6 +123,11 @@ async def _resolve_uploaded_files(file_ids: list[str]) -> list[FileInfo]:
 
 
 def _artifact_path_to_file_info(conversation_id: str, artifact_path: str) -> FileInfo:
+    """把某个会话产物路径转换成可复用的 `FileInfo`。
+
+    这样生成的产物文件条目可以和上传文件一起进入 agent 输入状态，
+    让“继续处理上一轮产物”与“处理新上传文件”共用同一套工具链。
+    """
     resolved = _resolve_conversation_artifact_path(conversation_id, artifact_path)
     if not resolved.exists():
         raise HTTPException(status_code=404, detail=f"Artifact not found: {artifact_path}")
@@ -140,6 +152,7 @@ def _artifact_path_to_file_info(conversation_id: str, artifact_path: str) -> Fil
 
 
 def _resolve_selected_artifacts(conversation_id: str, artifact_paths: list[str]) -> list[FileInfo]:
+    """解析前端显式选择的产物路径，并去重后转换成 `FileInfo`。"""
     if not artifact_paths:
         return []
     seen: set[str] = set()
@@ -163,15 +176,23 @@ def _artifact_step_sort_key(artifact_path: str) -> tuple[int, str]:
 
 
 def _resolve_message_named_artifact_paths(conversation_dir: Path, message: str, conversation_id: str = "") -> list[str]:
+    """根据用户消息里直接提到的文件名，自动匹配最近产物路径。
+
+    这样用户说“继续处理刚才那个 xxx.pdf”时，不必每次都显式点选附件；
+    后端会优先把消息里提到的同名产物补进本轮输入集合。
+    """
     if not message.strip() or not conversation_dir.exists():
         return []
 
     artifacts = _list_artifacts(conversation_dir, conversation_id=conversation_id)
     resolved: list[str] = []
     seen_filenames: set[str] = set()
+    # 先按 step 倒序扫描，保证同名产物优先命中最近一次生成的版本。
     for artifact in sorted(artifacts, key=lambda item: _artifact_step_sort_key(item["path"]), reverse=True):
         filename = str(artifact.get("filename", "") or "")
         artifact_path = str(artifact.get("path", "") or "")
+        # 同名文件只保留最新的一份：
+        # 用户自然语言里说“刚才那个 report.pdf”时，通常指的是最近一次生成的版本。
         if not filename or not artifact_path or filename in seen_filenames:
             continue
         if filename in message:
@@ -181,6 +202,7 @@ def _resolve_message_named_artifact_paths(conversation_dir: Path, message: str, 
 
 
 def _serialize_selected_input(file_info: FileInfo, conversation_id: str) -> dict[str, str]:
+    """把 `FileInfo` 收缩成适合写入消息附加信息的前端摘要结构。"""
     path = str(file_info["path"])
     item = {
         "name": file_info["orig_name"],
@@ -188,9 +210,11 @@ def _serialize_selected_input(file_info: FileInfo, conversation_id: str) -> dict
         "mimeType": file_info["mime_type"],
     }
     if file_info["source"] == "artifact":
+        # 产物既要给前端一个可下载 URL，也要保留相对路径，便于后续再次选中同一文件。
         item["path"] = _paths_to_download_urls(conversation_id, [path])[0]
         item["artifactPath"] = file_info["artifact_path"]
     else:
+        # 上传文件继续通过 file_id 追踪，后续下载/删除仍走上传文件接口。
         item["file_id"] = file_info["file_id"]
     return item
 
@@ -204,6 +228,11 @@ def _build_message_input_state(
     conversation_run_id: str,
     selected_inputs: list[FileInfo],
 ) -> dict:
+    """构造传给 LangGraph 的单轮输入状态。
+
+    这里把“本轮选中的文件”“会话工作目录”“运行 ID”都集中挂到 state 上，
+    方便后续工具节点、进度上报和 checkpoint 读取走统一入口。
+    """
     selected_paths = [f["path"] for f in selected_inputs]
     input_state: dict = {
         "messages": [
@@ -216,7 +245,9 @@ def _build_message_input_state(
         "configurable": {"thread_id": conversation_id, "run_id": conversation_run_id},
     }
     if selected_inputs:
+        # `files` 是当前会话可用文件池，供工具节点做合法输入校验。
         input_state["files"] = selected_inputs
+        # `current_files` 则定义“如果模型这一步不显式指定输入，就默认处理哪些文件”。
         input_state["current_files"] = selected_paths
     return input_state
 
@@ -268,6 +299,7 @@ def _format_tool_label(tool_name: str) -> str:
 
 
 def _tool_client_summary(tool_name: str, parsed_result) -> dict[str, object]:
+    """把工具执行结果压缩成适合前端展示的摘要。"""
     meta = parsed_result.meta if parsed_result else {}
     warning = meta.get("warning") if isinstance(meta, dict) and isinstance(meta.get("warning"), str) else ""
     log = parsed_result.log.strip() if parsed_result and parsed_result.log else ""
@@ -353,6 +385,7 @@ def _conversation_title_path(conversation_dir: Path) -> Path:
 
 
 def _sanitize_conversation_title(raw: str) -> str:
+    """规范化会话标题，避免空标题、过长标题和旧默认标题残留。"""
     normalized = " ".join((raw or "").strip().split())
     if normalized == "New Conversation":
         normalized = _DEFAULT_CONVERSATION_TITLE
@@ -364,6 +397,7 @@ def _sanitize_conversation_title(raw: str) -> str:
 
 
 def _read_conversation_title(conversation_dir: Path) -> str:
+    """读取会话标题；失败时回退到统一默认值。"""
     title_path = _conversation_title_path(conversation_dir)
     if not title_path.exists():
         return _DEFAULT_CONVERSATION_TITLE
@@ -375,6 +409,7 @@ def _read_conversation_title(conversation_dir: Path) -> str:
 
 
 def _write_conversation_title(conversation_dir: Path, title: str) -> None:
+    """把标题写回会话目录，供列表页和详情页复用。"""
     title_path = _conversation_title_path(conversation_dir)
     safe_title = _sanitize_conversation_title(title)
     try:
@@ -388,6 +423,7 @@ def _conversation_stats_cache_path(conversation_dir: Path) -> Path:
 
 
 def _scan_conversation_stats(conversation_dir: Path) -> tuple[int, int]:
+    """扫描会话目录，统计步骤数和用户可见产物数。"""
     step_count = 0
     artifact_count = 0
     for step_dir in conversation_dir.iterdir():
@@ -402,6 +438,12 @@ def _scan_conversation_stats(conversation_dir: Path) -> tuple[int, int]:
 
 
 def _load_conversation_stats(conversation_dir: Path) -> tuple[int, int]:
+    """带缓存地读取会话统计信息。
+
+    目录统计最贵的部分是递归扫描每个 `step_*` 子目录，因此这里会把结果写入
+    `.conversation_stats.json`。同时又要尽量不污染目录本身的 mtime，所以写完缓存后
+    会把会话目录时间戳恢复回去。
+    """
     stats_file = _conversation_stats_cache_path(conversation_dir)
     now = time.time()
     conversation_mtime_ns = 0
@@ -425,6 +467,7 @@ def _load_conversation_stats(conversation_dir: Path) -> tuple[int, int]:
         except (OSError, ValueError, json.JSONDecodeError):
             logger.debug("Conversation stats cache read failed for %s", conversation_dir, exc_info=True)
 
+    # 缓存失效后再做完整扫描，并把结果与目录 mtime 一起缓存下来。
     step_count, artifact_count = _scan_conversation_stats(conversation_dir)
     payload = {
         "conversation_mtime_ns": conversation_mtime_ns,
@@ -460,6 +503,7 @@ def _is_user_visible_artifact(candidate: Path, step_dir: Path) -> bool:
 
 
 def _is_state_backend_error(exc: Exception) -> bool:
+    """粗略判断异常是否来自状态后端不可用，而不是业务逻辑本身失败。"""
     if isinstance(exc, (ConnectionError, OSError, TimeoutError, asyncio.TimeoutError)):
         return True
     lowered = f"{type(exc).__name__}: {exc}".lower()
@@ -478,7 +522,13 @@ def _is_state_backend_error(exc: Exception) -> bool:
 
 
 async def _load_conversation_messages_from_graph(conversation_id: str, request: Request) -> list[dict]:
-    """从 LangGraph 持久化状态中恢复会话消息。"""
+    """从 LangGraph 持久化状态中恢复会话消息。
+
+    需要特别处理工具消息：
+    - 工具消息本身通常不直接展示给前端；
+    - 但它可能携带产物路径，这些产物要挂接到后续 AI 回复上；
+    - 人类消息里的 `selected_inputs` 也要还原为前端能展示的附件列表。
+    """
     graph = request.app.state.graph
     messages: list[dict] = []
     if graph is None:
@@ -488,6 +538,9 @@ async def _load_conversation_messages_from_graph(conversation_id: str, request: 
     state = await graph.aget_state(config)
 
     if state and state.values:
+        # 工具节点和 AI 节点在 LangGraph 里是分开的。
+        # 这里用一个缓冲区把“工具产生的输出文件”暂存起来，等到后续 AI 消息出现时再挂到它身上，
+        # 这样前端读到的消息序列会更接近真实对话，而不是直接暴露内部 tool message。
         pending_output_files: list[str] = []
         for msg in state.values.get("messages", []):
             if msg.type == "tool":
@@ -514,11 +567,13 @@ async def _load_conversation_messages_from_graph(conversation_id: str, request: 
                 if isinstance(additional_kwargs, dict):
                     selected_inputs = additional_kwargs.get("selected_inputs")
                     if isinstance(selected_inputs, list):
+                        # 直接回放发送消息时固化下来的附件摘要，避免再次猜测当时到底选中了哪些文件。
                         msg_data["attachments"] = [
                             item for item in selected_inputs
                             if isinstance(item, dict) and isinstance(item.get("name"), str)
                         ]
             if msg.type == "ai" and pending_output_files:
+                # 一个 AI 回复前可能串过多条工具消息，所以这里要先去重，再一次性挂到 AI 消息上。
                 deduped_files = list(dict.fromkeys(pending_output_files))
                 msg_data["files"] = _paths_to_download_urls(conversation_id, deduped_files)
                 pending_output_files = []
@@ -554,6 +609,7 @@ async def _load_conversation_messages(
             status="ok",
         )
     except Exception as exc:
+        # 只有“状态后端真的挂了”才允许降级；如果是业务 bug，则保持抛错，避免静默吞问题。
         if not settings.degrade_on_state_backend_failure or not _is_state_backend_error(exc):
             raise
         logger.warning(
@@ -574,6 +630,7 @@ async def _load_conversation_messages(
 
 
 def _serialize_conversation(conversation_dir: Path) -> dict:
+    """把会话目录序列化成列表页/详情页都能复用的摘要结构。"""
     stat = conversation_dir.stat()
     step_count, artifact_count = _load_conversation_stats(conversation_dir)
     return {
@@ -588,6 +645,7 @@ def _serialize_conversation(conversation_dir: Path) -> dict:
 
 
 def _list_artifacts(conversation_dir: Path, conversation_id: str) -> list[dict]:
+    """列出某个会话目录下全部对用户可见的产物文件。"""
     artifacts: list[dict] = []
     for step_dir in sorted(conversation_dir.iterdir()):
         try:
@@ -598,6 +656,7 @@ def _list_artifacts(conversation_dir: Path, conversation_id: str) -> list[dict]:
             continue
         for artifact in step_dir.rglob("*"):
             try:
+                # 会过滤掉隐藏文件和运行时内部文件，只把用户真正可下载的产物暴露出去。
                 if not _is_user_visible_artifact(artifact, step_dir):
                     continue
                 rel = artifact.relative_to(conversation_dir).as_posix()
@@ -741,6 +800,7 @@ async def download_conversation_artifact(
 
 
 def _idempotency_replay_stream(payload: dict[str, object]):
+    """构造幂等重放场景下的最小 SSE 响应流。"""
     async def _stream():
         yield _sse_event("idempotency_replay", payload)
         yield _sse_event("done", {})
@@ -749,7 +809,15 @@ def _idempotency_replay_stream(payload: dict[str, object]):
 
 @router.post("/api/conversations/{conversation_id}/messages")
 async def create_message(conversation_id: str, req: MessageCreateRequest, request: Request):
-    """发起一轮对话，并通过 SSE 持续推送 token、进度和产物事件。"""
+    """发起一轮对话，并通过 SSE 持续推送 token、进度和产物事件。
+
+    这个入口承担的流程比较长，但可以按阶段理解：
+    1. 校验会话 ID 与幂等键；
+    2. 解析本轮显式/隐式选中的输入文件；
+    3. 构造 LangGraph 输入状态；
+    4. 进入事件流，把模型 token、工具进度和产物逐步转成 SSE；
+    5. 在 finally 中补写本地历史和幂等结果，保证后续恢复一致。
+    """
     graph = request.app.state.graph
     if graph is None:
         raise HTTPException(status_code=503, detail="Agent not initialized")
@@ -764,44 +832,22 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
     idempotency_record_id = None
     idempotency_scope = "conversation_message"
     if idempotency_key:
+        # 先在本地把请求哈希算出来；这里如果出错，说明是本地代码/数据问题，不该被伪装成后端降级。
+        request_hash = build_request_hash(
+            {
+                "conversation_id": conversation_id,
+                "message": req.message,
+                "file_ids": req.file_ids,
+                "artifact_paths": req.artifact_paths,
+            }
+        )
         try:
+            # 对“同一个会话 + 同一轮输入”做幂等保护，避免用户重复点击导致并发执行两次。
             decision = await idempotency_service.acquire(
                 scope=f"conversation_message:{conversation_id}",
                 key=idempotency_key,
-                request_hash=build_request_hash(
-                    {
-                        "conversation_id": conversation_id,
-                        "message": req.message,
-                        "file_ids": req.file_ids,
-                        "artifact_paths": req.artifact_paths,
-                    }
-                ),
+                request_hash=request_hash,
             )
-            if decision.action == "conflict":
-                metrics.record_idempotency_event(scope=idempotency_scope, action="conflict")
-                raise HTTPException(status_code=409, detail=decision.message or "Idempotency key conflict")
-            if decision.action == "in_progress":
-                metrics.record_idempotency_event(scope=idempotency_scope, action="in_progress")
-                detail: dict[str, object] = {
-                    "detail": "A request with the same Idempotency-Key is already in progress",
-                }
-                if decision.response_payload:
-                    detail["existing"] = decision.response_payload
-                raise HTTPException(status_code=409, detail=detail)
-            if decision.action == "replay":
-                metrics.record_idempotency_event(scope=idempotency_scope, action="replay")
-                replay_payload = decision.response_payload or {"conversation_id": conversation_id, "status": "REPLAYED"}
-                return StreamingResponse(
-                    _idempotency_replay_stream(replay_payload)(),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no",
-                        "X-Idempotency-Replayed": "true",
-                    },
-                )
-            idempotency_record_id = decision.record_id
         except HTTPException:
             raise
         except Exception:
@@ -816,8 +862,39 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
             )
             idempotency_record_id = None
             idempotency_key = None
+        else:
+            if decision.action == "conflict":
+                # 相同幂等键但请求体不一致，说明客户端复用了错误的 key。
+                metrics.record_idempotency_event(scope=idempotency_scope, action="conflict")
+                raise HTTPException(status_code=409, detail=decision.message or "Idempotency key conflict")
+            if decision.action == "in_progress":
+                # 相同请求已经在跑，直接拒绝第二次进入，避免两个 agent 并发改同一会话目录。
+                metrics.record_idempotency_event(scope=idempotency_scope, action="in_progress")
+                detail: dict[str, object] = {
+                    "detail": "A request with the same Idempotency-Key is already in progress",
+                }
+                # 如果第一条请求已经写入了处理中上下文，把这份信息也回给前端，便于关联当前运行。
+                if decision.response_payload:
+                    detail["existing"] = decision.response_payload
+                raise HTTPException(status_code=409, detail=detail)
+            if decision.action == "replay":
+                # 之前已经成功完成过，就不再重新跑 agent，而是直接回放结果给前端。
+                metrics.record_idempotency_event(scope=idempotency_scope, action="replay")
+                replay_payload = decision.response_payload or {"conversation_id": conversation_id, "status": "REPLAYED"}
+                return StreamingResponse(
+                    _idempotency_replay_stream(replay_payload)(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                        "X-Idempotency-Replayed": "true",
+                    },
+                )
+            idempotency_record_id = decision.record_id
 
     conversation_run_id = f"{conversation_id}:{uuid.uuid4().hex}"
+    # `conversation_run_id` 比单纯的 `conversation_id` 更细，可以把同一会话下的并发执行区分开。
 
     # 先解析用户显式选择的上传文件与产物文件，再组装这轮对话的输入集。
     uploaded_files = await _resolve_uploaded_files(req.file_ids)
@@ -827,9 +904,12 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
     message_named_artifact_paths = _resolve_message_named_artifact_paths(conversation_workdir, req.message, conversation_id=conversation_id)
     effective_artifact_paths = message_named_artifact_paths or req.artifact_paths
     selected_artifacts = _resolve_selected_artifacts(conversation_id, effective_artifact_paths)
+    # 如果用户在消息正文里直接提到产物名，则把这些产物排在前面，强化“继续处理它”的语义。
+    # 顺序会继续影响 `current_files`，因此也决定了单输入工具默认会先吃到哪个文件。
     selected_inputs = (selected_artifacts + uploaded_files) if message_named_artifact_paths else (uploaded_files + selected_artifacts)
     current_title = _read_conversation_title(conversation_workdir)
     if current_title == _DEFAULT_CONVERSATION_TITLE:
+        # 只有首次对话时才用用户第一句话刷新标题，避免后续每轮都把标题冲掉。
         _write_conversation_title(conversation_workdir, req.message)
 
     # 组装传给 LangGraph 的输入状态，并把仅供模型消费的辅助信息放进 additional_kwargs。
@@ -850,6 +930,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
         content=req.message,
         attachments=selected_input_summaries or None,
     )
+    # 本地 history 文件是 checkpointer 不可用时的兜底，所以人类消息要尽早落盘。
 
     input_state = _build_message_input_state(
         message=req.message,
@@ -861,6 +942,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
     )
 
     config = {"configurable": {"thread_id": conversation_id}}
+    # 对 graph 来说，恢复/续跑只需要 thread_id；真正区分并发运行的是 state 里的 run_id。
 
     if idempotency_record_id is not None:
         try:
@@ -877,6 +959,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
             logger.warning("Failed to persist idempotency processing state for %s", conversation_run_id, exc_info=True)
 
     async def event_stream():
+        # 事件流一开始先把 conversation_id 发给前端，便于前端建立本轮上下文。
         yield _sse_event("conversation", {"conversation_id": conversation_id})
 
         # 进度队列与 SSE 共用同一会话运行 ID，便于工具层和接口层解耦。
@@ -887,6 +970,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
         started_at = time.perf_counter()
         last_heartbeat_at = started_at
         run_status = "SUCCESS"
+        # 这里先缓存文本片段和产物 URL，等最终状态确定后再统一写入本地历史。
         assistant_chunks: list[str] = []
         assistant_artifacts: list[str] = []
         stream_error_message = ""
@@ -900,14 +984,19 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                 except queue.Empty:
                     break
                 if isinstance(item, dict):
+                    # 队列里保留的是最原始的 percent/message 结构，具体包装成哪类 SSE 事件由调用方决定。
                     updates.append(item)
             return updates
 
         try:
             while True:
                 try:
+                    # `astream_events()` 不会定时吐心跳，所以这里自己加短超时轮询，
+                    # 一边拉模型/工具事件，一边顺手把进度队列里的更新转给前端。
                     event = await asyncio.wait_for(stream_iter.__anext__(), timeout=0.25)
                 except asyncio.TimeoutError:
+                    # 轮询超时不代表失败，只是当前没新的 graph 事件。
+                    # 这时顺手把工具线程已经上报的进度吐给前端，并按需发送心跳。
                     for update in drain_progress_updates():
                         yield _sse_event("progress", {
                             "name": current_tool_name,
@@ -937,6 +1026,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                         yield _sse_event("token", {"content": text})
 
                 elif kind == "on_tool_start":
+                    # tool_start 先告诉前端“哪个工具开始了”，后续 progress 会沿用这个名字。
                     current_tool_name = str(event.get("name") or "tool")
                     tool_input = event.get("data", {}).get("input", {})
                     yield _sse_event("tool_start", {
@@ -959,6 +1049,8 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                     parsed = parse_tool_result_payload(output) if isinstance(output, str) else None
                     file_paths = parsed.output_files if parsed else _extract_output_files(output)
                     if file_paths:
+                        # tool_end 里如果有新产物，要立刻转成 artifact 事件，前端才能显示下载入口。
+                        # 同时把这些 URL 暂存起来，finally 里写历史消息时就能和文本一起落盘。
                         artifact_urls = _paths_to_download_urls(conversation_id, file_paths)
                         assistant_artifacts.extend(artifact_urls)
                         yield _sse_event("artifact", {
@@ -966,11 +1058,13 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                         })
                     tool_name = str(event.get("name") or current_tool_name or "tool")
                     yield _sse_event("tool_end", _tool_client_summary(tool_name, parsed))
+                    # tool_end 之后清空 current_tool_name，表示后续 heartbeat 不该再归属到旧工具。
                     current_tool_name = ""
                     last_heartbeat_at = time.perf_counter()
 
         except asyncio.CancelledError:
             run_status = "CANCELLED"
+            # 用户取消时，不只要结束 SSE，还要尽量终止底层外部命令进程。
             terminated = cancel_conversation_processes(conversation_run_id)
             if terminated:
                 logger.info(
@@ -982,6 +1076,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
             raise
         except Exception as e:
             run_status = "ERROR"
+            # 这里把底层异常翻译成更可操作的中文错误消息，避免前端只看到 SDK 原始异常。
             stream_error_message = _format_agent_stream_error(e)
             terminated = cancel_conversation_processes(conversation_run_id)
             if terminated:
@@ -1002,6 +1097,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
             if run_status == "SUCCESS":
                 assistant_text = "".join(assistant_chunks).strip()
                 if assistant_text or deduped_artifacts:
+                    # 只把真正面向用户的 AI 文本和产物写入本地历史，不写内部工具消息。
                     append_history_message(
                         conversation_dir=conversation_workdir,
                         msg_type="ai",
@@ -1025,6 +1121,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
 
             if idempotency_record_id is not None:
                 try:
+                    # 幂等状态在 finally 中统一收口，避免成功路径和失败路径各自遗漏一种状态。
                     if run_status == "SUCCESS":
                         await idempotency_service.mark_succeeded(
                             record_id=idempotency_record_id,
@@ -1057,6 +1154,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                     )
             release_progress_queue(conversation_run_id)
 
+        # 只有收尾逻辑都执行完后才发 done，前端这时再刷新详情不会读到半成品状态。
         yield _sse_event("done", {})
 
     response_headers = {

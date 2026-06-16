@@ -1,4 +1,4 @@
-"""FastAPI application entry point."""
+"""FastAPI 应用入口，负责装配运行时依赖与生命周期管理。"""
 from __future__ import annotations
 
 import asyncio
@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from psycopg_pool import AsyncConnectionPool
+from psycopg.rows import dict_row
 from sqlalchemy import select
 
 from pdf_agent.config import settings, validate_settings
@@ -30,12 +31,13 @@ from pdf_agent.tools.registry import load_builtin_tools, registry
 
 class _RequestIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
+        """为每条日志补齐 request_id，便于跨请求追踪。"""
         record.request_id = getattr(record, "request_id", get_request_id())
         return True
 
 
 def _configure_logging():
-    """Configure JSON structured logging with request_id support."""
+    """配置带 `request_id` 的结构化日志格式。"""
     log_format = (
         '{"time": "%(asctime)s", "level": "%(levelname)s", '
         '"name": "%(name)s", "request_id": "%(request_id)s", "message": %(message)r}'
@@ -57,12 +59,12 @@ logger = logging.getLogger(__name__)
 
 
 def _sync_database_url(database_url: str) -> str:
-    """Convert async SQLAlchemy/Postgres URLs into a sync psycopg URL."""
+    """把异步 SQLAlchemy/Postgres URL 转成 psycopg 需要的同步格式。"""
     return database_url.replace("postgresql+asyncpg://", "postgresql://")
 
 
 async def _cleanup_conversation_checkpoints(checkpointer, conversation_ids: list[str]) -> int:
-    """Delete persisted checkpoint state for known conversation ids."""
+    """删除指定会话对应的持久化 checkpoint 状态。"""
     if checkpointer is None:
         return 0
 
@@ -80,7 +82,7 @@ async def _cleanup_expired_conversations_with_checkpointer(
     checkpointer,
     conversation_ids: list[str] | None = None,
 ) -> int:
-    """Delete expired conversation workdirs and matching checkpoint state."""
+    """删除过期会话目录，并尽量同步清理对应的 checkpoint 状态。"""
     from pdf_agent.storage import storage
 
     expired = conversation_ids if conversation_ids is not None else storage.list_expired_conversations()
@@ -100,7 +102,7 @@ async def _cleanup_expired_conversations_with_checkpointer(
 
 
 async def _cleanup_upload_records(upload_ids: list[str]) -> int:
-    """Delete FileRecord rows for upload directories already removed from disk."""
+    """删除磁盘上已经不存在的上传目录对应的数据库记录。"""
     parsed_ids: list[uuid.UUID] = []
     for upload_id in upload_ids:
         try:
@@ -120,7 +122,7 @@ async def _cleanup_upload_records(upload_ids: list[str]) -> int:
 
 
 async def _cleanup_trimmed_storage(app: FastAPI, removed_conversation_ids: list[str], removed_upload_ids: list[str]) -> tuple[int, int]:
-    """Synchronize DB/checkpoint state after LRU storage trimming."""
+    """在 LRU 裁剪存储后，同步修复数据库和 checkpoint 的残留状态。"""
     removed_uploads = await _cleanup_upload_records(removed_upload_ids)
     removed_checkpoints = await _cleanup_conversation_checkpoints(
         getattr(app.state, "checkpointer", None),
@@ -147,11 +149,11 @@ async def _reconcile_idempotency_drift() -> tuple[int, int]:
 
 
 async def _cleanup_loop(app: FastAPI):
-    """Periodically clean up expired uploads, stale conversation state, and storage pressure."""
+    """后台定期清理过期上传、陈旧会话和存储压力导致的残留状态。"""
     from pdf_agent.storage import storage
 
     while True:
-        # every hour
+        # 固定按小时轮询，避免把清理逻辑压到每次请求上执行。
         await asyncio.sleep(3600)
         try:
             removed_conversations = await _cleanup_expired_conversations_with_checkpointer(
@@ -186,7 +188,7 @@ async def _cleanup_loop(app: FastAPI):
 
 
 def _setup_langsmith():
-    """Configure LangSmith tracing via environment variables if API key is set."""
+    """在配置了 API Key 时开启 LangSmith tracing。"""
     if not settings.langsmith_api_key:
         return
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
@@ -196,7 +198,7 @@ def _setup_langsmith():
 
 
 def _setup_sentry():
-    """Initialize Sentry error tracking if DSN is configured."""
+    """在配置了 DSN 时初始化 Sentry 错误追踪。"""
     if not settings.sentry_dsn:
         return
     try:
@@ -213,7 +215,9 @@ def _setup_sentry():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    """管理应用启动与关闭期间的依赖初始化、清理和资源释放。"""
+
+    # 启动阶段先准备目录、监控和工具注册，确保后续 API 依赖可用。
     logger.info("Starting %s ...", settings.app_name)
     validate_settings()
     settings.ensure_dirs()
@@ -231,7 +235,7 @@ async def lifespan(app: FastAPI):
         load_builtin_tools()
     logger.info("Loaded %d tools", len(registry))
 
-    # Run initial cleanup
+    # 先做一次启动清理，把上次异常退出遗留的过期目录和记录收干净。
     from pdf_agent.storage import storage
     expired_conversation_ids = storage.list_expired_conversations()
     removed = await _cleanup_expired_conversations_with_checkpointer(None, conversation_ids=expired_conversation_ids)
@@ -259,8 +263,14 @@ async def lifespan(app: FastAPI):
             logger.info("Agent persistence disabled by configuration")
         else:
             try:
+                # LangGraph 持久化依赖 psycopg 连接池；初始化失败时直接降级为无持久化模式。
                 pool = AsyncConnectionPool(
                     conninfo=_sync_database_url(settings.database_url),
+                    kwargs={
+                        "autocommit": True,
+                        "prepare_threshold": 0,
+                        "row_factory": dict_row,
+                    },
                     max_size=20,
                     open=False,
                 )
@@ -285,6 +295,7 @@ async def lifespan(app: FastAPI):
         try:
             from pdf_agent.agent.graph import build_graph
 
+            # 即使 checkpoint 不可用，只要模型可用，agent 仍可退化为无持久化运行。
             app.state.graph = build_graph(checkpointer, registry)
             app.state.pool = pool
             app.state.checkpointer = checkpointer
@@ -303,7 +314,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("OpenAI API key not configured; agent endpoints disabled")
 
-    # Catch any expired conversations that may still have persisted checkpoint state.
+    # 二次兜底清理：处理在存储裁剪过程中被删掉、但 checkpoint 仍残留的会话状态。
     trimmed_conversation_ids = trim_result.removed_conversation_ids if 'trim_result' in locals() else []
     checkpoint_cleanup_ids = list(dict.fromkeys([*expired_conversation_ids, *trimmed_conversation_ids]))
     if app.state.checkpointer is not None and checkpoint_cleanup_ids:
@@ -323,12 +334,12 @@ async def lifespan(app: FastAPI):
             reconciled_failed,
         )
 
-    # Start background cleanup task
+    # 后台清理任务独立运行，不阻塞主应用启动。
     cleanup_task = asyncio.create_task(_cleanup_loop(app))
 
     yield
 
-    # Shutdown
+    # 关闭阶段按相反顺序释放后台任务与外部连接池。
     logger.info("Shutting down %s", settings.app_name)
     cleanup_task.cancel()
     try:
@@ -352,7 +363,7 @@ app.state.graph = None
 app.state.pool = None
 app.state.checkpointer = None
 
-# Middleware (outermost first)
+# 中间件按“越通用越外层”的顺序注册，保证指标、鉴权和请求追踪行为稳定。
 if settings.metrics_enabled:
     from pdf_agent.api.metrics import MetricsMiddleware
     app.add_middleware(MetricsMiddleware)
@@ -370,12 +381,13 @@ app.add_middleware(
 if settings.cors_origin_list == ["*"]:
     logger.warning("CORS allows all origins (cors_origins='*'). Set PDF_AGENT_CORS_ORIGINS for production.")
 
-# Routes
+# 统一挂载 API 路由。
 app.include_router(api_router)
 
 
 @app.exception_handler(PDFAgentError)
 async def pdf_agent_error_handler(request: Request, exc: PDFAgentError) -> JSONResponse:
+    """把领域异常转换成带本地化消息的 HTTP JSON 响应。"""
     from pdf_agent.core import error_http_status, localized_error
     accept_lang = request.headers.get("Accept-Language", "")
     locale = "zh" if "zh" in accept_lang else settings.default_locale

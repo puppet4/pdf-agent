@@ -55,7 +55,11 @@ def _normalize_upload_content_type(filename: str, content_type: str | None) -> s
 
 
 async def _spill_upload_to_tempfile(file: UploadFile, tmp_path: Path | None = None) -> Path:
-    """把上传流边读边写入临时文件，避免整文件常驻内存。"""
+    """把上传流边读边写入临时文件，避免整文件常驻内存。
+
+    这样后续文件校验、SHA256 计算和真正落盘都可以围绕临时路径进行，
+    同时也能在超出大小限制时尽早中断，不必把整个文件吃进内存。
+    """
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
     temp_root = tmp_path or (settings.data_dir / "tmp_uploads")
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -131,7 +135,13 @@ async def upload_file(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ) -> FileUploadResponse:
-    """处理单文件上传，并把幂等状态与上传结果保持一致。"""
+    """处理单文件上传，并把幂等状态与上传结果保持一致。
+
+    这个接口表面上只是“上传一个文件”，但实际上要串联三件事：
+    - 流式接收并做大小限制；
+    - 和幂等后端协商，避免重复上传同一请求；
+    - 调用 `FileService` 执行真正的校验、落盘和元数据写入。
+    """
     svc = FileService(session)
     normalized_content_type = _normalize_upload_content_type(
         file.filename or "unknown",
@@ -144,11 +154,15 @@ async def upload_file(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     temp_path = await _spill_upload_to_tempfile(file)
+    # 后续所有校验都围绕临时文件进行：
+    # - 可以重复读取做 hash / 魔数检查；
+    # - 真正失败时也只需要删除临时文件，不会污染正式上传目录。
     idempotency_record_id = None
     idempotency_scope = "file_upload"
     idempotency_key_hash: str | None = None
 
     async def _safe_mark_processing(payload: dict[str, object]) -> None:
+        """尽力把幂等记录标记为处理中；失败只记日志，不阻断主流程。"""
         if idempotency_record_id is None:
             return
         try:
@@ -161,6 +175,7 @@ async def upload_file(
             logger.warning("Failed to persist idempotency processing state", exc_info=True)
 
     async def _safe_mark_failed(status_code: int, message: str) -> None:
+        """尽力把幂等记录标记为失败。"""
         if idempotency_record_id is None:
             return
         try:
@@ -174,6 +189,7 @@ async def upload_file(
             logger.warning("Failed to persist idempotency failure state", exc_info=True)
 
     async def _safe_mark_succeeded(payload: dict[str, object]) -> None:
+        """尽力把幂等记录标记为成功。"""
         if idempotency_record_id is None:
             return
         try:
@@ -204,9 +220,11 @@ async def upload_file(
                     request_hash=request_hash,
                 )
                 if decision.action == "conflict":
+                    # 相同幂等键却对应不同文件内容，通常说明客户端错误复用了 key。
                     metrics.record_idempotency_event(scope=idempotency_scope, action="conflict")
                     raise HTTPException(status_code=409, detail=decision.message or "Idempotency key conflict")
                 if decision.action == "in_progress":
+                    # 上传流程包含磁盘写入和数据库提交，不能并发重复执行。
                     metrics.record_idempotency_event(scope=idempotency_scope, action="in_progress")
                     raise HTTPException(
                         status_code=409,
@@ -216,12 +234,14 @@ async def upload_file(
                     metrics.record_idempotency_event(scope=idempotency_scope, action="replay")
                     payload = decision.response_payload or {}
                     response.headers["X-Idempotency-Replayed"] = "true"
+                    # 直接返回之前的成功结果，不再重新走上传/缩略图/落库流程。
                     return FileUploadResponse.model_validate(payload)
                 idempotency_record_id = decision.record_id
                 idempotency_key_hash = hash_idempotency_key(idempotency_key)
             except HTTPException:
                 raise
             except Exception:
+                # 幂等后端不可用时，上传功能本身仍可继续，只是失去去重能力。
                 logger.warning(
                     "degradation path=/api/files reason=idempotency_backend_unavailable action=upload",
                     exc_info=True,
@@ -250,6 +270,7 @@ async def upload_file(
         await _safe_mark_failed(500, str(exc))
         raise
     finally:
+        # 无论成功失败都清掉临时文件，避免 `tmp_uploads` 长期堆积。
         temp_path.unlink(missing_ok=True)
     thumb_exists = record.mime_type == "application/pdf" and (Path(record.storage_path).parent / "thumbnail.jpg").exists()
     result = FileUploadResponse(
@@ -263,6 +284,8 @@ async def upload_file(
         thumbnail_url=f"/api/files/{record.id}/thumbnail" if thumb_exists else None,
     )
     if idempotency_record_id is not None:
+        # 只有本次确实创建了幂等记录，才回填成功状态和响应头。
+        # replay 场景在上面已经提前返回，这里只处理“本次真的完成了上传”的情况。
         await _safe_mark_succeeded(result.model_dump(mode="json"))
         response.headers["X-Idempotency-Key"] = idempotency_key or ""
     return result
@@ -366,6 +389,7 @@ async def get_page_image(
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     render_dir = Path(tempfile.mkdtemp(prefix="page-preview-", dir=settings.data_dir))
     out_stem = render_dir / "page"
+    # 渲染过程放在线程里执行外部命令，避免阻塞事件循环。
     result = await asyncio.to_thread(
         run_command,
         [pdftoppm, "-r", "96", "-jpeg", "-f", str(page), "-l", str(page),
@@ -385,6 +409,7 @@ async def get_page_image(
     return FileResponse(
         candidates[0],
         media_type="image/jpeg",
+        # 临时渲染目录只服务这一次响应，回完文件后立即清掉。
         background=BackgroundTask(shutil.rmtree, render_dir, True),
     )
 
