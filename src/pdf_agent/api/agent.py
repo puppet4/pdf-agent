@@ -257,6 +257,23 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _message_content_to_text(content: object) -> str:
+    """把 LangChain message content 归一成面向用户的文本。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
+
+
 def _format_agent_stream_error(exc: Exception) -> str:
     if isinstance(exc, (APIConnectionError, APITimeoutError, httpx.ConnectError, httpx.TimeoutException)):
         return (
@@ -966,6 +983,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
         from pdf_agent.agent.tools_adapter import get_progress_queue, release_progress_queue
         progress_queue = get_progress_queue(conversation_run_id)
         stream_iter = graph.astream_events(input_state, config=config, version="v2").__aiter__()
+        next_event_task: asyncio.Task | None = asyncio.create_task(stream_iter.__anext__())
         current_tool_name = ""
         started_at = time.perf_counter()
         last_heartbeat_at = started_at
@@ -990,12 +1008,14 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
 
         try:
             while True:
-                try:
-                    # `astream_events()` 不会定时吐心跳，所以这里自己加短超时轮询，
-                    # 一边拉模型/工具事件，一边顺手把进度队列里的更新转给前端。
-                    event = await asyncio.wait_for(stream_iter.__anext__(), timeout=0.25)
-                except asyncio.TimeoutError:
+                if next_event_task is None:
+                    next_event_task = asyncio.create_task(stream_iter.__anext__())
+
+                done, _pending = await asyncio.wait({next_event_task}, timeout=0.25)
+                if not done:
                     # 轮询超时不代表失败，只是当前没新的 graph 事件。
+                    # 不能用 `asyncio.wait_for()` 包住 `__anext__()`：超时会取消底层
+                    # graph/model 调用，导致前端只收到 conversation/done，没有模型回复。
                     # 这时顺手把工具线程已经上报的进度吐给前端，并按需发送心跳。
                     for update in drain_progress_updates():
                         yield _sse_event("progress", {
@@ -1012,8 +1032,13 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                         })
                         last_heartbeat_at = time.perf_counter()
                     continue
+
+                try:
+                    event = next_event_task.result()
                 except StopAsyncIteration:
                     break
+                finally:
+                    next_event_task = None
 
                 kind = event["event"]
 
@@ -1021,9 +1046,20 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                 if kind == "on_chat_model_stream":
                     chunk = event["data"]["chunk"]
                     if chunk.content:
-                        text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+                        text = _message_content_to_text(chunk.content)
                         assistant_chunks.append(text)
                         yield _sse_event("token", {"content": text})
+
+                elif kind == "on_chat_model_end":
+                    # Some OpenAI-compatible providers do not emit token chunks through
+                    # LangChain events. Fall back to the final message so the UI still
+                    # receives and persists the assistant response.
+                    if not assistant_chunks:
+                        output = event.get("data", {}).get("output")
+                        text = _message_content_to_text(getattr(output, "content", ""))
+                        if text:
+                            assistant_chunks.append(text)
+                            yield _sse_event("token", {"content": text})
 
                 elif kind == "on_tool_start":
                     # tool_start 先告诉前端“哪个工具开始了”，后续 progress 会沿用这个名字。
@@ -1064,6 +1100,8 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
 
         except asyncio.CancelledError:
             run_status = "CANCELLED"
+            if next_event_task is not None and not next_event_task.done():
+                next_event_task.cancel()
             # 用户取消时，不只要结束 SSE，还要尽量终止底层外部命令进程。
             terminated = cancel_conversation_processes(conversation_run_id)
             if terminated:

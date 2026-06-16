@@ -1,6 +1,7 @@
 """HTTP contract tests for conversation lifecycle and streaming behavior."""
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator
@@ -114,6 +115,69 @@ def test_message_stream_returns_minimal_successful_sse_and_persists_history(conv
     assert '"content": "Summarize this"' in history
     assert '"type": "ai"' in history
     assert '"content": "Done"' in history
+
+
+def test_message_stream_uses_chat_model_end_when_provider_does_not_stream_chunks(
+    conversation_client: TestClient,
+):
+    conversation_id = conversation_client.post("/api/conversations").json()["id"]
+
+    class _NonStreamingGraph:
+        def astream_events(self, input_state, *, config, version):
+            assert input_state["messages"][0].content == "Reply once"
+            assert config == {"configurable": {"thread_id": conversation_id}}
+            assert version == "v2"
+
+            async def _events():
+                yield {
+                    "event": "on_chat_model_end",
+                    "data": {"output": SimpleNamespace(content="Final answer")},
+                }
+
+            return _events()
+
+    conversation_client.app.state.graph = _NonStreamingGraph()
+
+    response = conversation_client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"message": "Reply once"},
+    )
+
+    assert response.status_code == 200
+    assert 'event: token\ndata: {"content": "Final answer"}' in response.text
+    assert "event: done" in response.text
+
+    history = (settings.conversations_dir / conversation_id / ".history.jsonl").read_text(encoding="utf-8")
+    assert '"type": "ai"' in history
+    assert '"content": "Final answer"' in history
+
+
+def test_message_stream_does_not_cancel_slow_first_model_event(conversation_client: TestClient):
+    conversation_id = conversation_client.post("/api/conversations").json()["id"]
+
+    class _SlowFirstTokenGraph:
+        def astream_events(self, input_state, *, config, version):
+            assert input_state["messages"][0].content == "Wait briefly"
+
+            async def _events():
+                await asyncio.sleep(0.3)
+                yield {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": SimpleNamespace(content="Still answered")},
+                }
+
+            return _events()
+
+    conversation_client.app.state.graph = _SlowFirstTokenGraph()
+
+    response = conversation_client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={"message": "Wait briefly"},
+    )
+
+    assert response.status_code == 200
+    assert 'event: token\ndata: {"content": "Still answered"}' in response.text
+    assert "event: done" in response.text
 
 
 def test_message_stream_emits_error_sse_redacts_args_and_persists_system_history(

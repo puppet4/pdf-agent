@@ -131,6 +131,23 @@ async def _cleanup_trimmed_storage(app: FastAPI, removed_conversation_ids: list[
     return removed_uploads, removed_checkpoints
 
 
+def _is_backend_connection_error(exc: Exception) -> bool:
+    """判断异常是否更像后端连接失败，而不是本地逻辑 bug。"""
+    if isinstance(exc, (ConnectionError, OSError, TimeoutError, asyncio.TimeoutError)):
+        return True
+    lowered = f"{type(exc).__name__}: {exc}".lower()
+    markers = (
+        "connection",
+        "connect",
+        "timeout",
+        "refused",
+        "reset by peer",
+        "server closed",
+        "couldn't get a connection",
+    )
+    return any(marker in lowered for marker in markers)
+
+
 async def _reconcile_idempotency_drift() -> tuple[int, int]:
     from pdf_agent.services.idempotency import idempotency_service
     from pdf_agent.api.metrics import metrics
@@ -142,8 +159,11 @@ async def _reconcile_idempotency_drift() -> tuple[int, int]:
         if stats.fixed_failed:
             metrics.record_idempotency_event(scope="file_upload", action="reconciled_failed")
         return stats.fixed_success, stats.fixed_failed
-    except Exception:
-        logger.warning("Idempotency reconciliation skipped because backend is unavailable", exc_info=True)
+    except Exception as exc:
+        if _is_backend_connection_error(exc):
+            logger.warning("Idempotency reconciliation skipped because backend is unavailable: %s", exc)
+        else:
+            logger.warning("Idempotency reconciliation skipped because backend is unavailable", exc_info=True)
         metrics.record_degradation(path="system", reason="idempotency_reconcile_backend_unavailable")
         return (0, 0)
 

@@ -229,6 +229,41 @@ async def test_reconcile_idempotency_drift_success_and_degraded_failure(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_reconcile_idempotency_drift_connection_error_logs_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    degradations: list[tuple[str, str]] = []
+    warnings: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    class _Metrics:
+        def record_idempotency_event(self, *, scope: str, action: str) -> None:
+            raise AssertionError("connection degradation should not emit success metrics")
+
+        def record_degradation(self, *, path: str, reason: str) -> None:
+            degradations.append((path, reason))
+
+    class _FailingIdempotency:
+        async def reconcile_file_upload_processing(self):
+            raise ConnectionResetError("peer reset")
+
+    import pdf_agent.api.metrics as metrics_module
+    import pdf_agent.services.idempotency as idem_module
+
+    monkeypatch.setattr(metrics_module, "metrics", _Metrics())
+    monkeypatch.setattr(idem_module, "idempotency_service", _FailingIdempotency())
+    monkeypatch.setattr(
+        main.logger,
+        "warning",
+        lambda message, *args, **kwargs: warnings.append((message, args, kwargs)),
+    )
+
+    assert await main._reconcile_idempotency_drift() == (0, 0)
+    assert degradations == [("system", "idempotency_reconcile_backend_unavailable")]
+    assert warnings
+    assert warnings[0][2].get("exc_info") is not True
+
+
+@pytest.mark.asyncio
 async def test_cleanup_loop_runs_one_successful_cycle_then_propagates_cancellation(
     monkeypatch: pytest.MonkeyPatch,
 ):

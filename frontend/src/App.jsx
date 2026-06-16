@@ -96,14 +96,23 @@ function App() {
     if (isSending) {
       return undefined;
     }
-    const timer = window.setInterval(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
       loadFiles().catch(() => {});
       loadConversations().catch(() => {});
       if (currentConversationId) {
         loadArtifacts(currentConversationId).catch(() => {});
       }
-    }, 5000);
-    return () => window.clearInterval(timer);
+    };
+
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, [currentConversationId, isSending]);
 
   useEffect(() => {
