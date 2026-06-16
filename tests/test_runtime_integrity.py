@@ -12,7 +12,7 @@ import uuid
 import pytest
 from fastapi import HTTPException
 
-from pdf_agent.agent import tools_adapter
+from pdf_agent.agent import tool_execution
 from pdf_agent.api.files import delete_file
 from pdf_agent.api.agent import _load_conversation_messages, _load_conversation_stats
 from pdf_agent.api.middleware import _load_rate_limit_state
@@ -184,14 +184,14 @@ def test_redact_returns_explicit_warning_when_ghostscript_is_unavailable(
 
 
 def test_async_tool_semaphore_is_safe_to_initialize_inside_worker_threads(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(tools_adapter, "_ASYNC_SEMAPHORE", None)
+    monkeypatch.setattr(tool_execution, "_ASYNC_SEMAPHORE", None)
 
     holder: dict[str, object] = {}
     errors: list[BaseException] = []
 
     def _worker() -> None:
         try:
-            holder["semaphore"] = tools_adapter._get_semaphore()
+            holder["semaphore"] = tool_execution._get_semaphore()
         except BaseException as exc:  # pragma: no cover - assertion below exercises this
             errors.append(exc)
 
@@ -200,7 +200,7 @@ def test_async_tool_semaphore_is_safe_to_initialize_inside_worker_threads(monkey
     thread.join()
 
     assert errors == []
-    assert holder["semaphore"] is tools_adapter._ASYNC_SEMAPHORE
+    assert holder["semaphore"] is tool_execution._ASYNC_SEMAPHORE
 
 
 @pytest.mark.asyncio
@@ -222,8 +222,8 @@ async def test_execute_tool_uses_run_id_for_progress_and_process_tracking(
         captured["bound_run_id"] = run_id
         yield
 
-    monkeypatch.setattr(tools_adapter, "get_progress_queue", _fake_get_progress_queue)
-    monkeypatch.setattr(tools_adapter, "bind_conversation_run_context", _fake_bind)
+    monkeypatch.setattr(tool_execution, "get_progress_queue", _fake_get_progress_queue)
+    monkeypatch.setattr(tool_execution, "bind_conversation_run_context", _fake_bind)
 
     state = {
         "files": [
@@ -242,7 +242,7 @@ async def test_execute_tool_uses_run_id_for_progress_and_process_tracking(
         "configurable": {"thread_id": "conversation-1", "run_id": "conversation-1:run-a"},
     }
 
-    result = await tools_adapter._execute_tool_with_state(
+    result = await tool_execution._execute_tool_with_state(
         tool=tool,
         manifest=tool.manifest(),
         state=state,

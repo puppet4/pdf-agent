@@ -1,13 +1,13 @@
-"""Adapt existing BaseTool instances to LangChain StructuredTool for LangGraph."""
+"""把领域工具模型适配为 LangChain `StructuredTool`。
+
+本文件现在只保留“薄适配”职责：
+- 根据 `ToolManifest` 生成 Pydantic 参数 schema；
+- 为每个 `BaseTool` 生成 LangChain 可调用包装器；
+- 暴露缓存后的工具映射，供 LangGraph 绑定。
+"""
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass, field
-import json
 import logging
-import queue
-import re
-import threading
 import time
 import weakref
 from pathlib import Path
@@ -17,43 +17,50 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
 from pdf_agent.agent.state import AgentState
-from pdf_agent.api.metrics import metrics
-from pdf_agent.config import settings
+from pdf_agent.agent.tool_execution import (
+    _allowed_state_paths,
+    _execute_tool_with_state,
+    _get_semaphore,
+    _state_file_entries,
+)
+from pdf_agent.agent.tool_protocol import (
+    AdaptedToolRunResult,
+    _raise_for_error_output,
+    format_tool_result_payload,
+    get_progress_queue,
+    parse_tool_result_payload,
+    release_progress_queue,
+)
 from pdf_agent.core import ErrorCode, PDFAgentError
-from pdf_agent.external_commands import bind_conversation_run_context
 from pdf_agent.schemas.tool import ParamSpec, ToolManifest
-from pdf_agent.tools.base import BaseTool, ToolResult
+from pdf_agent.tools.base import BaseTool
 from pdf_agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-_RESULT_JSON_PREFIX = "Result JSON:"
-_ERROR_RESULT_RE = re.compile(r"^Error:\s*(?:\[(?P<code>[A-Z_]+)\]\s*)?(?P<message>.+)$")
+__all__ = [
+    "AdaptedToolRunResult",
+    "_allowed_state_paths",
+    "_build_args_schema",
+    "_execute_tool_with_state",
+    "_get_semaphore",
+    "_make_tool_wrapper",
+    "_raise_for_error_output",
+    "_state_file_entries",
+    "adapt_all_tools",
+    "get_adapted_tool_map",
+    "get_progress_queue",
+    "invoke_adapted_tool",
+    "parse_tool_result_payload",
+    "release_progress_queue",
+]
 
 # ---------------------------------------------------------------------------
-# Concurrency limiter for CPU-intensive async tools
-# ---------------------------------------------------------------------------
-
-_ASYNC_SEMAPHORE: threading.Semaphore | None = None
-_SEMAPHORE_LOCK = threading.Lock()
-# max simultaneous OCR/compress/etc operations
-_MAX_CONCURRENT_ASYNC = 4
-
-
-def _get_semaphore() -> threading.Semaphore:
-    global _ASYNC_SEMAPHORE
-    if _ASYNC_SEMAPHORE is None:
-        with _SEMAPHORE_LOCK:
-            if _ASYNC_SEMAPHORE is None:
-                _ASYNC_SEMAPHORE = threading.Semaphore(_MAX_CONCURRENT_ASYNC)
-    return _ASYNC_SEMAPHORE
-
-# ---------------------------------------------------------------------------
-# ParamSpec → Pydantic field mapping
+# ParamSpec -> Pydantic 字段映射
 # ---------------------------------------------------------------------------
 
 def _param_to_field(p: ParamSpec) -> tuple[type, Any]:
-    """Convert a ParamSpec to a (python_type, Field) tuple for create_model."""
+    """把领域参数定义转换成 `create_model()` 需要的字段描述。"""
     field_kwargs: dict[str, Any] = {"description": p.description or p.label}
 
     if p.type == "string":
@@ -79,7 +86,7 @@ def _param_to_field(p: ParamSpec) -> tuple[type, Any]:
             py_type = str
     elif p.type == "page_range":
         py_type = str
-        field_kwargs.setdefault("description", "Page range, e.g. 'all', '1-3,5', 'odd', 'even'")
+        field_kwargs.setdefault("description", "页码范围，例如：all、1-3,5、odd、even")
     else:
         py_type = str
 
@@ -94,250 +101,34 @@ def _param_to_field(p: ParamSpec) -> tuple[type, Any]:
 
 
 def _build_args_schema(manifest: ToolManifest) -> type[BaseModel]:
-    """Dynamically build a Pydantic model from a tool's manifest params."""
+    """根据工具 manifest 动态构造 Pydantic 参数模型。"""
     fields: dict[str, Any] = {}
 
     for p in manifest.params:
         fields[p.name] = _param_to_field(p)
 
-    # Multi-file tools expose an explicit file path list parameter
+    # 多文件工具额外暴露显式文件路径列表，便于在对话状态里精确指定输入集合。
     if manifest.inputs.max > 1:
         fields["input_file_paths"] = (
             Optional[list[str]],
-            Field(default=None, description="Explicit input file paths. If omitted, uses current active files."),
+            Field(default=None, description="显式输入文件路径列表；省略时使用当前激活文件集。"),
         )
 
-    model = create_model(f"{manifest.name}_Args", **fields)
-    return model
-
-
-def _allowed_state_paths(state: AgentState) -> set[Path]:
-    """Return the normalized set of file paths already attached to the agent state."""
-    allowed: set[Path] = set()
-    for item in state.get("files", []):
-        path = item.get("path") if isinstance(item, dict) else None
-        if path:
-            allowed.add(Path(path).resolve())
-    for path in state.get("current_files", []):
-        allowed.add(Path(path).resolve())
-    return allowed
-
-
-# ---------------------------------------------------------------------------
-# SSE progress queue — keyed by conversation-run id at the app layer
-# ---------------------------------------------------------------------------
-
-# Maps conversation_run_id -> (queue, creation_timestamp)
-_progress_queues: dict[str, tuple[queue.Queue, float]] = {}
-_progress_lock = threading.Lock()
-# 1 hour
-_PROGRESS_TTL_SEC = 3600
-
-
-def get_progress_queue(conversation_run_id: str) -> queue.Queue:
-    with _progress_lock:
-        now = time.time()
-        stale = [k for k, (_, ts) in _progress_queues.items() if now - ts > _PROGRESS_TTL_SEC]
-        for k in stale:
-            _progress_queues.pop(k, None)
-        if conversation_run_id not in _progress_queues:
-            _progress_queues[conversation_run_id] = (queue.Queue(maxsize=100), now)
-        else:
-            q, _ = _progress_queues[conversation_run_id]
-            _progress_queues[conversation_run_id] = (q, now)
-        return _progress_queues[conversation_run_id][0]
-
-
-def release_progress_queue(conversation_run_id: str):
-    with _progress_lock:
-        _progress_queues.pop(conversation_run_id, None)
-
-
-# ---------------------------------------------------------------------------
-# Structured tool-run result
-# ---------------------------------------------------------------------------
-
-@dataclass
-class AdaptedToolRunResult:
-    log: str = ""
-    meta: dict[str, Any] = field(default_factory=dict)
-    output_files: list[str] = field(default_factory=list)
-    raw_output: str = ""
-    elapsed_seconds: float | None = None
-
-
-def parse_tool_result_payload(result_str: str) -> AdaptedToolRunResult:
-    """Parse the formatted StructuredTool response back into structured data."""
-    for line in result_str.splitlines():
-        if line.startswith(_RESULT_JSON_PREFIX):
-            raw = line[len(_RESULT_JSON_PREFIX):].strip()
-            payload = json.loads(raw)
-            elapsed = payload.get("elapsed_seconds")
-            return AdaptedToolRunResult(
-                log=str(payload.get("log", "") or ""),
-                meta=payload.get("meta", {}) if isinstance(payload.get("meta"), dict) else {},
-                output_files=[
-                    str(path)
-                    for path in payload.get("output_files", [])
-                    if isinstance(path, str) and path
-                ],
-                raw_output=result_str,
-                elapsed_seconds=float(elapsed) if isinstance(elapsed, (int, float)) else None,
-            )
-    return AdaptedToolRunResult(log=result_str.strip(), raw_output=result_str)
-
-
-def _raise_for_error_output(result_str: str) -> None:
-    match = _ERROR_RESULT_RE.match(result_str.strip())
-    if not match:
-        return
-    code = match.group("code") or ErrorCode.ENGINE_EXEC_FAILED
-    raise PDFAgentError(code=code, message=match.group("message").strip())
-
-
-def _state_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
-    return [
-        {
-            "file_id": str(index),
-            "path": str(path.resolve()),
-            "orig_name": path.name,
-            "mime_type": "",
-            "page_count": None,
-            "source": "conversation_run",
-        }
-        for index, path in enumerate(paths, start=1)
-    ]
+    return create_model(f"{manifest.name}_Args", **fields)
 
 
 _SENSITIVE_PARAMS = frozenset({"owner_password", "user_password", "p12_password"})
 
 # ---------------------------------------------------------------------------
-# Wrapper that bridges LangChain tool call → BaseTool.run()
+# 连接 LangChain 调用与 BaseTool.run() 的包装器
 # ---------------------------------------------------------------------------
-
-async def _execute_tool_with_state(
-    *,
-    tool: BaseTool,
-    manifest: ToolManifest,
-    state: AgentState | dict[str, Any],
-    kwargs: dict[str, Any],
-    progress_reporter=None,
-):
-    """Execute one tool against an agent-like state with shared validation."""
-    explicit_paths = kwargs.pop("input_file_paths", None)
-    if explicit_paths:
-        allowed_paths = _allowed_state_paths(state)
-        input_paths = [Path(p).resolve() for p in explicit_paths]
-        if not set(input_paths).issubset(allowed_paths):
-            raise PDFAgentError(
-                code=ErrorCode.INVALID_INPUT_FILE,
-                message="explicit input_file_paths must stay within the active file set",
-            )
-    else:
-        input_paths = [Path(p).resolve() for p in state.get("current_files", [])]
-
-    if len(input_paths) < manifest.inputs.min:
-        raise PDFAgentError(
-            code=ErrorCode.INVALID_INPUT_FILE,
-            message=f"{manifest.name} requires at least {manifest.inputs.min} input file(s), got {len(input_paths)}",
-        )
-    if len(input_paths) > manifest.inputs.max:
-        input_paths = input_paths[: manifest.inputs.max]
-
-    step = state.get("step_counter", 0)
-    conversation_workdir = Path(state.get("conversation_workdir", "/tmp"))
-    step_dir = conversation_workdir / f"step_{step}"
-    step_dir.mkdir(parents=True, exist_ok=True)
-
-    params: dict[str, Any] = {}
-    for p in manifest.params:
-        if p.name in kwargs and kwargs[p.name] is not None:
-            params[p.name] = kwargs[p.name]
-        elif p.default is not None:
-            params[p.name] = p.default
-    validated_params = tool.validate(params)
-
-    configurable = state.get("configurable", {}) if isinstance(state, dict) else {}
-    thread_id = configurable.get("thread_id", "") if isinstance(configurable, dict) else ""
-    run_id = configurable.get("run_id", "") if isinstance(configurable, dict) else ""
-    conversation_run_id = str(run_id or thread_id or "")
-    prog_queue: queue.Queue | None = get_progress_queue(conversation_run_id) if conversation_run_id else None
-
-    def reporter(percent: int, message: str = "") -> None:
-        if prog_queue:
-            try:
-                prog_queue.put_nowait({"percent": percent, "message": message})
-            except queue.Full:
-                pass
-        if progress_reporter:
-            progress_reporter(percent, message)
-
-    start = time.perf_counter()
-    try:
-        with bind_conversation_run_context(conversation_run_id or None):
-            if manifest.async_hint:
-                def _run_async_tool() -> ToolResult:
-                    semaphore = _get_semaphore()
-                    semaphore.acquire()
-                    try:
-                        return tool.run(
-                            inputs=input_paths,
-                            params=validated_params,
-                            workdir=step_dir,
-                            reporter=reporter,
-                        )
-                    finally:
-                        semaphore.release()
-
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(_run_async_tool),
-                    timeout=settings.external_cmd_timeout_sec,
-                )
-            else:
-                result = tool.run(
-                    inputs=input_paths,
-                    params=validated_params,
-                    workdir=step_dir,
-                    reporter=reporter,
-                )
-    except asyncio.TimeoutError as exc:
-        raise PDFAgentError(
-            code=ErrorCode.ENGINE_EXEC_TIMEOUT,
-            message=f"{manifest.name} timed out after {settings.external_cmd_timeout_sec}s",
-        ) from exc
-    except PDFAgentError:
-        raise
-    except Exception as exc:
-        logger.exception("Tool %s failed", manifest.name)
-        raise PDFAgentError(
-            code=ErrorCode.ENGINE_EXEC_FAILED,
-            message=f"{manifest.name} failed: {exc}",
-        ) from exc
-
-    # Validate output files stay within step_dir (allow input pass-through)
-    input_set = {p.resolve() for p in input_paths}
-    step_dir_resolved = step_dir.resolve()
-    for f in result.output_files:
-        if Path(f).resolve() in input_set:
-            continue
-        if not Path(f).resolve().is_relative_to(step_dir_resolved):
-            raise PDFAgentError(
-                code=ErrorCode.OUTPUT_GENERATION_FAILED,
-                message=f"{manifest.name} wrote output outside its work directory",
-            )
-
-    metrics.record_tool(manifest.name, time.perf_counter() - start)
-    return result
 
 
 def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
-    """Create the callable that runs when the LLM invokes this tool.
+    """创建真正供 LLM 调用的包装函数。
 
-    The custom tool node injects 'state' and 'tool_call_id' into kwargs
-    before calling this wrapper. They are NOT part of the args_schema.
-
-    Long-running tools (async_hint=True) are executed in a thread pool
-    via asyncio.to_thread() to avoid blocking the event loop.
+    自定义工具节点会在调用前额外注入 `state`、`tool_call_id` 等运行时字段。
+    这些字段不属于公开 schema，因此需要在包装层手动接收并转交给执行层。
     """
 
     async def async_wrapper(**kwargs: Any) -> str:
@@ -359,35 +150,22 @@ def _make_tool_wrapper(tool: BaseTool, manifest: ToolManifest):
             logger.exception("Tool %s failed unexpectedly", manifest.name)
             return f"Error: [{ErrorCode.ENGINE_EXEC_FAILED}] {exc}"
 
-        # --- Format result ---
-        output_files = [str(f) for f in result.output_files]
-        safe_meta = {k: v for k, v in (result.meta or {}).items() if k not in _SENSITIVE_PARAMS}
-        elapsed_seconds = round(time.perf_counter() - start, 3)
-        payload = {
-            "log": result.log,
-            "meta": safe_meta,
-            "output_files": output_files,
-            "elapsed_seconds": elapsed_seconds,
-        }
-        parts = []
-        if result.log:
-            parts.append(result.log)
-        if safe_meta:
-            parts.append(f"Metadata: {json.dumps(safe_meta, ensure_ascii=False, default=str)}")
-        parts.append(f"Result JSON: {json.dumps(payload, ensure_ascii=False, default=str)}")
-
-        result_str = "\n".join(parts) if parts else "Done (no output)."
-        return result_str
+        # 返回值保持字符串协议，便于 LangGraph 工具消息和 SSE 层复用同一套解析逻辑。
+        return format_tool_result_payload(
+            result,
+            elapsed_seconds=round(time.perf_counter() - start, 3),
+            sensitive_params=_SENSITIVE_PARAMS,
+        )
 
     return async_wrapper
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# 对外公开的适配入口
 # ---------------------------------------------------------------------------
 
 def adapt_all_tools(registry: ToolRegistry) -> list[StructuredTool]:
-    """Convert all registered BaseTool instances into LangChain StructuredTools."""
+    """把注册表里的全部领域工具适配为 LangChain `StructuredTool`。"""
     tools: list[StructuredTool] = []
 
     for base_tool in registry.list_all():
@@ -399,7 +177,7 @@ def adapt_all_tools(registry: ToolRegistry) -> list[StructuredTool]:
             name=manifest.name,
             description=manifest.description or manifest.label,
             args_schema=args_schema,
-            # async wrapper
+            # 使用异步包装器，保证 LangGraph 在事件循环内调用时不会阻塞。
             coroutine=wrapper,
         )
         tools.append(lc_tool)
@@ -412,7 +190,7 @@ _ADAPTED_TOOL_MAP_CACHE: weakref.WeakKeyDictionary[ToolRegistry, tuple[tuple[str
 
 
 def get_adapted_tool_map(registry: ToolRegistry) -> dict[str, StructuredTool]:
-    """Return a cached name -> StructuredTool map for the current registry snapshot."""
+    """返回当前注册表快照对应的缓存工具映射。"""
     current_keys = tuple(sorted(t.name for t in registry.list_all()))
     cached = _ADAPTED_TOOL_MAP_CACHE.get(registry)
     if cached is None or cached[0] != current_keys:
@@ -433,7 +211,7 @@ async def invoke_adapted_tool(
     conversation_id: str,
     progress_reporter=None,
 ) -> AdaptedToolRunResult:
-    """Execute a tool through the LangChain StructuredTool adapter path."""
+    """通过适配后的 LangChain 工具路径执行一次工具调用。"""
     tool_map = get_adapted_tool_map(registry)
     lc_tool = tool_map.get(tool_name)
     if lc_tool is None:
@@ -447,6 +225,7 @@ async def invoke_adapted_tool(
         "step_counter": step_counter,
         "configurable": {"thread_id": conversation_id, "run_id": conversation_id},
     }
+    # 这里主动传入 state 和 tool_call_id，模拟真实 LangGraph 工具节点的调用上下文。
     result_str = await lc_tool.coroutine(
         state=state,
         tool_call_id=f"conversation_run:{conversation_id}:{step_counter}:{tool_name}",

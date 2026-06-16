@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from pdf_agent.agent import graph, tools_adapter
+from pdf_agent.agent import graph, tool_execution, tool_protocol, tools_adapter
 from pdf_agent.core import ErrorCode, PDFAgentError
 from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolOutputSpec
 from pdf_agent.tools.base import BaseTool, ToolResult
@@ -152,19 +152,19 @@ def test_allowed_state_paths_and_progress_queue_ttl(monkeypatch: pytest.MonkeyPa
         "current_files": [str(missing)],
     }
 
-    assert tools_adapter._allowed_state_paths(state) == {sample_pdf.resolve(), missing.resolve()}
+    assert tool_execution._allowed_state_paths(state) == {sample_pdf.resolve(), missing.resolve()}
 
-    tools_adapter._progress_queues.clear()
-    monkeypatch.setattr(tools_adapter, "time", SimpleNamespace(time=lambda: 1000.0))
-    first = tools_adapter.get_progress_queue("run-a")
-    same = tools_adapter.get_progress_queue("run-a")
+    tool_protocol._progress_queues.clear()
+    monkeypatch.setattr(tool_protocol, "time", SimpleNamespace(time=lambda: 1000.0))
+    first = tool_protocol.get_progress_queue("run-a")
+    same = tool_protocol.get_progress_queue("run-a")
     assert same is first
 
-    tools_adapter._progress_queues["stale"] = (queue.Queue(), 1000.0 - tools_adapter._PROGRESS_TTL_SEC - 1)
-    tools_adapter.get_progress_queue("run-b")
-    assert "stale" not in tools_adapter._progress_queues
-    tools_adapter.release_progress_queue("run-a")
-    assert "run-a" not in tools_adapter._progress_queues
+    tool_protocol._progress_queues["stale"] = (queue.Queue(), 1000.0 - tool_protocol._PROGRESS_TTL_SEC - 1)
+    tool_protocol.get_progress_queue("run-b")
+    assert "stale" not in tool_protocol._progress_queues
+    tool_protocol.release_progress_queue("run-a")
+    assert "run-a" not in tool_protocol._progress_queues
 
 
 def test_result_payload_parser_and_error_output_contracts():
@@ -174,7 +174,7 @@ def test_result_payload_parser_and_error_output_contracts():
         "output_files": ["/tmp/out.pdf", "", 12],
         "elapsed_seconds": 1.25,
     }
-    parsed = tools_adapter.parse_tool_result_payload(
+    parsed = tool_protocol.parse_tool_result_payload(
         "finished\nResult JSON: " + json.dumps(payload)
     )
 
@@ -183,18 +183,18 @@ def test_result_payload_parser_and_error_output_contracts():
     assert parsed.output_files == ["/tmp/out.pdf"]
     assert parsed.elapsed_seconds == 1.25
     assert tools_adapter.parse_tool_result_payload("plain text").log == "plain text"
-    assert tools_adapter.parse_tool_result_payload(
+    assert tool_protocol.parse_tool_result_payload(
         "Result JSON: " + json.dumps({"meta": "bad", "elapsed_seconds": "bad"})
     ).meta == {}
-    assert tools_adapter._state_file_entries([Path("/tmp/a.pdf")])[0]["orig_name"] == "a.pdf"
+    assert tool_execution._state_file_entries([Path("/tmp/a.pdf")])[0]["orig_name"] == "a.pdf"
 
     with pytest.raises(PDFAgentError) as explicit:
-        tools_adapter._raise_for_error_output("Error: [INVALID_PARAMS] bad input")
+        tool_protocol._raise_for_error_output("Error: [INVALID_PARAMS] bad input")
     assert explicit.value.code == ErrorCode.INVALID_PARAMS
     with pytest.raises(PDFAgentError) as fallback:
-        tools_adapter._raise_for_error_output("Error: backend failed")
+        tool_protocol._raise_for_error_output("Error: backend failed")
     assert fallback.value.code == ErrorCode.ENGINE_EXEC_FAILED
-    tools_adapter._raise_for_error_output("not an error")
+    tool_protocol._raise_for_error_output("not an error")
 
 
 @pytest.mark.asyncio
@@ -222,10 +222,10 @@ async def test_execute_tool_validates_inputs_defaults_progress_and_outputs(
         bound_ids.append(run_id)
         yield
 
-    monkeypatch.setattr(tools_adapter, "get_progress_queue", fake_queue)
-    monkeypatch.setattr(tools_adapter, "bind_conversation_run_context", fake_bind)
+    monkeypatch.setattr(tool_execution, "get_progress_queue", fake_queue)
+    monkeypatch.setattr(tool_execution, "bind_conversation_run_context", fake_bind)
 
-    result = await tools_adapter._execute_tool_with_state(
+    result = await tool_execution._execute_tool_with_state(
         tool=tool,
         manifest=manifest,
         state=_state(sample_pdf, tmp_path),
@@ -247,7 +247,7 @@ async def test_execute_tool_validates_inputs_defaults_progress_and_outputs(
     second_pdf = sample_pdf.parent / "second.pdf"
     second_pdf.write_bytes(sample_pdf.read_bytes())
     truncated_state = _state(sample_pdf, tmp_path, current_files=[str(sample_pdf), str(second_pdf)])
-    await tools_adapter._execute_tool_with_state(
+    await tool_execution._execute_tool_with_state(
         tool=truncated_tool,
         manifest=_manifest(inputs_min=1, inputs_max=1),
         state=truncated_state,
@@ -264,7 +264,7 @@ async def test_execute_tool_rejects_bad_inputs_and_wraps_runtime_errors(
     tool = _RecordingTool()
 
     with pytest.raises(PDFAgentError) as missing:
-        await tools_adapter._execute_tool_with_state(
+        await tool_execution._execute_tool_with_state(
             tool=tool,
             manifest=_manifest(inputs_min=2),
             state=_state(sample_pdf, tmp_path, current_files=[]),
@@ -273,7 +273,7 @@ async def test_execute_tool_rejects_bad_inputs_and_wraps_runtime_errors(
     assert missing.value.code == ErrorCode.INVALID_INPUT_FILE
 
     with pytest.raises(PDFAgentError) as outside_input:
-        await tools_adapter._execute_tool_with_state(
+        await tool_execution._execute_tool_with_state(
             tool=tool,
             manifest=_manifest(inputs_max=2),
             state=_state(sample_pdf, tmp_path),
@@ -283,7 +283,7 @@ async def test_execute_tool_rejects_bad_inputs_and_wraps_runtime_errors(
 
     outside_output = tmp_path / "outside.pdf"
     with pytest.raises(PDFAgentError) as outside:
-        await tools_adapter._execute_tool_with_state(
+        await tool_execution._execute_tool_with_state(
             tool=_RecordingTool(result=ToolResult(output_files=[outside_output])),
             manifest=_manifest(),
             state=_state(sample_pdf, tmp_path),
@@ -292,7 +292,7 @@ async def test_execute_tool_rejects_bad_inputs_and_wraps_runtime_errors(
     assert outside.value.code == ErrorCode.OUTPUT_GENERATION_FAILED
 
     with pytest.raises(PDFAgentError) as wrapped:
-        await tools_adapter._execute_tool_with_state(
+        await tool_execution._execute_tool_with_state(
             tool=_RecordingTool(run_error=RuntimeError("boom")),
             manifest=_manifest(),
             state=_state(sample_pdf, tmp_path),
@@ -312,10 +312,10 @@ async def test_execute_async_tool_timeout_is_reported(
             awaitable.close()
         raise asyncio.TimeoutError
 
-    monkeypatch.setattr(tools_adapter.asyncio, "wait_for", fake_wait_for)
+    monkeypatch.setattr(tool_execution.asyncio, "wait_for", fake_wait_for)
 
     with pytest.raises(PDFAgentError) as exc_info:
-        await tools_adapter._execute_tool_with_state(
+        await tool_execution._execute_tool_with_state(
             tool=_RecordingTool(manifest=_manifest(async_hint=True)),
             manifest=_manifest(async_hint=True),
             state=_state(sample_pdf, tmp_path),
