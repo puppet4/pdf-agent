@@ -1,4 +1,4 @@
-"""QR code tool — insert a QR code onto PDF pages."""
+"""在 PDF 页面上插入二维码。"""
 from __future__ import annotations
 
 import io
@@ -59,7 +59,7 @@ class QrCodeTool(BaseTool):
         size = params["size"]
         margin = 15
 
-        # Generate QR code image
+        # 先生成二维码图片
         qr = qrcode.QRCode(box_size=3, border=2)
         qr.add_data(params["content"])
         qr.make(fit=True)
@@ -81,7 +81,7 @@ class QrCodeTool(BaseTool):
                 x = pw - size - margin if "right" in pos else margin
                 y = margin if "bottom" in pos else ph - size - margin
 
-                # Build overlay
+                # 构造覆盖层 PDF
                 overlay_buf = io.BytesIO()
                 c = canvas.Canvas(overlay_buf, pagesize=(pw, ph))
                 qr_buf.seek(0)

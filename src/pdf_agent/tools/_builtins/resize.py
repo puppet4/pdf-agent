@@ -1,4 +1,4 @@
-"""Resize tool - resize PDF pages to a target size."""
+"""把 PDF 页面调整到目标尺寸。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,7 +11,7 @@ from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolO
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools.filenames import localized_output_name
 
-# Standard page sizes in points (72 dpi)
+# 标准页面尺寸，单位为 point（72 dpi）
 _PAGE_SIZES: dict[str, tuple[float, float]] = {
     "A3": (841.89, 1190.55),
     "A4": (595.28, 841.89),
@@ -86,7 +86,7 @@ class ResizeTool(BaseTool):
                 scale_x = target_w / cur_w
                 scale_y = target_h / cur_h
 
-                # Use uniform scale to maintain aspect ratio, then center
+                # 使用统一缩放保持纵横比，再将内容居中放置
                 scale = min(scale_x, scale_y)
                 offset_x = (target_w - cur_w * scale) / 2
                 offset_y = (target_h - cur_h * scale) / 2
@@ -94,7 +94,7 @@ class ResizeTool(BaseTool):
                 page.mediabox = [0, 0, target_w, target_h]
                 page.cropbox = [0, 0, target_w, target_h]
 
-                # Apply transform: translate + scale
+                # 应用平移加缩放的变换矩阵
                 content = pikepdf.parse_content_stream(page)
                 new_content = (
                     f"q {scale:.6f} 0 0 {scale:.6f} {offset_x:.6f} {offset_y:.6f} cm\n"

@@ -1,4 +1,4 @@
-"""Watermark text tool - add text watermark to PDF pages."""
+"""为 PDF 页面添加文字水印。"""
 from __future__ import annotations
 
 import io
@@ -15,7 +15,7 @@ from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolO
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools.filenames import localized_output_name
 
-# Register CJK font for Chinese watermark support
+# 注册 CJK 字体，以支持中文水印文本
 pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 
 
@@ -164,12 +164,12 @@ def _make_text_overlay(
     c.setFillColorRGB(*rgb)
     c.setFillAlpha(opacity)
 
-    # Detect CJK characters to choose font
+    # 检测是否包含 CJK 字符，以便选择合适字体
     has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in text)
     font_name = "STSong-Light" if has_cjk else "Helvetica"
     c.setFont(font_name, font_size)
 
-    # Place watermark text centered on page, rotated
+    # 将旋转后的水印文字居中放到页面上
     c.translate(page_w / 2, page_h / 2)
     c.rotate(rotation)
     c.drawCentredString(0, 0, text)

@@ -1,4 +1,4 @@
-"""Tool plugin system."""
+"""工具系统包。"""
 from pdf_agent.tools.base import BaseTool, ToolResult, ProgressReporter
 from pdf_agent.tools.registry import registry, load_builtin_tools
 

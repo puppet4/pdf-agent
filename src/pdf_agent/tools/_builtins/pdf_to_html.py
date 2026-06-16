@@ -1,4 +1,4 @@
-"""PDF to HTML tool — convert PDF to HTML using pdfminer or poppler."""
+"""使用 pdfminer 或 poppler 把 PDF 转成 HTML。"""
 from __future__ import annotations
 
 import shutil
@@ -40,12 +40,12 @@ class PdfToHtmlTool(BaseTool):
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
         params = self.validate(params)
 
-        # Try pdftohtml (poppler) first
+        # 优先尝试使用 poppler 的 `pdftohtml`
         pdftohtml = shutil.which("pdftohtml")
         if pdftohtml:
             return self._run_pdftohtml(pdftohtml, inputs[0], workdir, params, reporter)
 
-        # Fall back to LibreOffice
+        # 失败时回退到 LibreOffice 转换链路
         lo_bin = shutil.which("libreoffice") or shutil.which("soffice")
         if lo_bin:
             return self._run_libreoffice(lo_bin, inputs[0], workdir, reporter)
@@ -58,12 +58,12 @@ class PdfToHtmlTool(BaseTool):
         output_stem = workdir / localized_output_name(pdf_path, "转HTML", ext="")
         cmd = [bin_path, "-noframes", "-nodrm"]
         if params["single_page"]:
-            # single HTML file
+            # 兼容只生成单个 HTML 文件的情况
             cmd.append("-s")
         cmd += [str(pdf_path), str(output_stem)]
         run_command(cmd)
 
-        # Find output file
+        # 查找最终生成的输出文件
         html_files = sorted(workdir.glob(f"{output_stem.name}*.html")) + sorted(workdir.glob(f"{output_stem.name}*.htm"))
         if not html_files:
             raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, "pdftohtml produced no output")

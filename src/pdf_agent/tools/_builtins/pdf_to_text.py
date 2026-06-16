@@ -1,4 +1,4 @@
-"""PDF to text tool - extract text content from PDF pages."""
+"""从 PDF 页面中提取纯文本内容。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -75,7 +75,7 @@ class PdfToTextTool(BaseTool):
 
 
 def _extract_page_text(page: pikepdf.Page) -> str:
-    """Extract text from a PDF page by parsing content stream text operators."""
+    """通过解析内容流中的文本操作符，从单页 PDF 中提取文字。"""
     text_parts: list[str] = []
     try:
         instructions = pikepdf.parse_content_stream(page)

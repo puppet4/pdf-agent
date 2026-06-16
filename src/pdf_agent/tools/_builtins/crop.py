@@ -1,4 +1,4 @@
-"""Crop tool - crop PDF pages by adjusting the media box."""
+"""通过调整 media box 来裁剪 PDF 页面。"""
 from __future__ import annotations
 
 from pathlib import Path

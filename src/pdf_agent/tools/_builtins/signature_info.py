@@ -1,4 +1,4 @@
-"""Signature info tool — detect and verify digital signatures in a PDF when possible."""
+"""在可能的情况下检测并校验 PDF 数字签名信息。"""
 from __future__ import annotations
 
 import json
@@ -31,7 +31,7 @@ class SignatureInfoTool(BaseTool):
         signatures: list[dict] = []
 
         with pikepdf.open(inputs[0]) as pdf:
-            # Check AcroForm for signature fields
+            # 先检查 AcroForm 中是否存在签名字段
             if Name("/AcroForm") in pdf.Root:
                 acroform = pdf.Root["/AcroForm"]
                 fields = acroform.get("/Fields", [])

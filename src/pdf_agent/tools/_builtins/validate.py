@@ -1,4 +1,4 @@
-"""PDF validate tool — check PDF for errors and compliance issues using qpdf."""
+"""使用 qpdf 检查 PDF 是否存在错误或兼容性问题。"""
 from __future__ import annotations
 
 import json
@@ -36,7 +36,7 @@ class ValidateTool(BaseTool):
         issues = []
         is_valid = True
 
-        # Run qpdf check
+        # 先执行 qpdf 的基础校验
         result = run_command([qpdf, "--check", str(inputs[0])], check=False, timeout=60)
         stdout = result.stdout.decode("utf-8", errors="replace") + result.stderr.decode("utf-8", errors="replace")
         if result.returncode != 0:
@@ -46,7 +46,7 @@ class ValidateTool(BaseTool):
             if line and not line.startswith("PDF Version") and "checking" not in line.lower():
                 issues.append(line)
 
-        # Also check linearization
+        # 额外检查是否已经线性化
         try:
             lin_result = run_command([qpdf, "--check-linearization", str(inputs[0])], check=False, timeout=30)
             is_linearized = lin_result.returncode == 0

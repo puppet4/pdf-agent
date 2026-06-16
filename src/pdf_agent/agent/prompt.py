@@ -1,4 +1,4 @@
-"""System prompt builder for the LangGraph agent."""
+"""构建 LangGraph agent 使用的系统提示词。"""
 from __future__ import annotations
 
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -8,7 +8,7 @@ from pdf_agent.i18n import get_system_prompt
 
 
 def build_system_prompt(files: list[FileInfo], current_files: list[str]) -> str:
-    """Build the full system prompt with dynamic file context."""
+    """结合当前文件上下文构建完整系统提示词。"""
     parts = [get_system_prompt()]
 
     if files:
@@ -32,7 +32,7 @@ def build_system_prompt(files: list[FileInfo], current_files: list[str]) -> str:
 
 
 def prepare_messages_for_model(messages: list[BaseMessage]) -> list[BaseMessage]:
-    """Inject selected input context and normalized hints into human messages for model consumption only."""
+    """把选中文件上下文和归一化提示注入用户消息，仅供模型消费。"""
     prepared: list[BaseMessage] = []
     for message in messages:
         if isinstance(message, HumanMessage):

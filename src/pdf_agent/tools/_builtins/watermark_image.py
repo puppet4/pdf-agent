@@ -1,4 +1,4 @@
-"""Image watermark tool - add image watermark to PDF pages."""
+"""为 PDF 页面添加图片水印。"""
 from __future__ import annotations
 
 import io
@@ -93,7 +93,7 @@ class WatermarkImageTool(BaseTool):
             raise ToolError(ErrorCode.INVALID_INPUT_FILE, f"Cannot open watermark image: {exc}")
 
         if wm_img.mode == "RGBA":
-            # keep alpha
+            # 保留原图透明通道
             pass
         elif wm_img.mode != "RGB":
             wm_img = wm_img.convert("RGBA")
@@ -138,7 +138,7 @@ class WatermarkImageTool(BaseTool):
         )
 
 
-# points from edge
+# 距离页面边缘的点数偏移
 _MARGIN = 30
 
 
@@ -150,12 +150,12 @@ def _make_image_overlay(
     scale: float,
     position: str,
 ) -> io.BytesIO:
-    # Calculate watermark dimensions
+    # 计算水印尺寸
     wm_w = page_w * scale
     aspect = wm_img.height / wm_img.width
     wm_h = wm_w * aspect
 
-    # Calculate position
+    # 计算水印位置
     if position == "center":
         x = (page_w - wm_w) / 2
         y = (page_h - wm_h) / 2
@@ -165,7 +165,7 @@ def _make_image_overlay(
         x, y = page_w - wm_w - _MARGIN, page_h - wm_h - _MARGIN
     elif position == "bottom_left":
         x, y = _MARGIN, _MARGIN
-    # bottom_right
+    # 右下角
     else:
         x, y = page_w - wm_w - _MARGIN, _MARGIN
 
@@ -174,7 +174,7 @@ def _make_image_overlay(
     c.saveState()
     c.setFillAlpha(opacity)
 
-    # Convert PIL image to reportlab ImageReader
+    # 把 PIL 图片转换成 reportlab 可读取的 `ImageReader`
     img_buf = io.BytesIO()
     save_format = "PNG" if wm_img.mode == "RGBA" else "JPEG"
     wm_img.save(img_buf, format=save_format)

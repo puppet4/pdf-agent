@@ -1,4 +1,4 @@
-"""Prepare booklet page order for duplex printing."""
+"""为双面小册子打印准备页面顺序。"""
 from __future__ import annotations
 
 from pathlib import Path

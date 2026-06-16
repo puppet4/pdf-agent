@@ -1,4 +1,4 @@
-"""OCR tool - make scanned PDFs searchable using ocrmypdf."""
+"""使用 ocrmypdf 让扫描版 PDF 具备可搜索文本层。"""
 from __future__ import annotations
 
 import shutil

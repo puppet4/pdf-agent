@@ -1,4 +1,4 @@
-"""Error codes used across the application."""
+"""应用全局使用的错误码与错误封装。"""
 from __future__ import annotations
 
 
@@ -19,7 +19,7 @@ class ErrorCode:
     STORAGE_LIMIT_EXCEEDED = "STORAGE_LIMIT_EXCEEDED"
 
 
-# Localized error message templates keyed by error code
+# 按错误码组织的本地化错误消息模板。
 _ERROR_MESSAGES: dict[str, dict[str, str]] = {
     "en": {
         ErrorCode.INVALID_INPUT_FILE: "Invalid input file",
@@ -53,7 +53,7 @@ _ERROR_MESSAGES: dict[str, dict[str, str]] = {
 
 
 def localized_error(code: str, detail: str = "", locale: str | None = None) -> str:
-    """Return a localized error message for the given error code."""
+    """根据错误码返回本地化错误消息。"""
     from pdf_agent.config import settings
     loc = locale or settings.default_locale
     messages = _ERROR_MESSAGES.get(loc, _ERROR_MESSAGES["en"])

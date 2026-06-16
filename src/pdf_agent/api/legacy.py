@@ -1,4 +1,4 @@
-"""Legacy compatibility endpoints with phased deprecation strategy."""
+"""带阶段性下线策略的旧版兼容接口。"""
 from __future__ import annotations
 
 import re

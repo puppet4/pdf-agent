@@ -1,4 +1,4 @@
-"""Shared HTTP helpers for API responses."""
+"""API 响应共用的 HTTP 辅助函数。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 
 def content_disposition_headers(filename: str, *, inline: bool) -> dict[str, str]:
-    """Build RFC 6266/RFC 5987 compatible Content-Disposition headers."""
+    """构造兼容 RFC 6266 / RFC 5987 的 Content-Disposition 头。"""
     disposition = "inline" if inline else "attachment"
     safe_name = filename.replace("\\", "_").replace("\r", "").replace("\n", "").replace('"', "")
     ascii_fallback = safe_name.encode("ascii", "ignore").decode("ascii").strip(" .")

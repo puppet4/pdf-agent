@@ -1,4 +1,4 @@
-"""Rotate tool - rotate pages in a PDF."""
+"""旋转 PDF 页面。"""
 from __future__ import annotations
 
 from pathlib import Path

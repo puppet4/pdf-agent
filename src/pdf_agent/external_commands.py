@@ -1,4 +1,4 @@
-"""Tracked external command runs for conversation-run cancellation support."""
+"""跟踪外部命令执行，便于按会话运行维度取消子进程。"""
 from __future__ import annotations
 
 import contextvars
@@ -26,7 +26,7 @@ _current_conversation_run_id: contextvars.ContextVar[str | None] = contextvars.C
 
 @contextmanager
 def bind_conversation_run_context(conversation_run_id: str | None):
-    """Bind the current conversation-run id so nested command calls are tracked automatically."""
+    """绑定当前会话运行 ID，使嵌套命令调用也能被自动跟踪。"""
     token = _current_conversation_run_id.set(conversation_run_id)
     try:
         yield
@@ -42,7 +42,7 @@ def run_command(
     timeout: int | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run a subprocess while tracking it so conversation-run cancellation can terminate it."""
+    """执行子进程并登记到跟踪表中，便于会话取消时统一终止。"""
     tracked_conversation_run_id = conversation_run_id or _current_conversation_run_id.get()
     popen_kwargs = {
         "cwd": str(cwd) if cwd else None,
@@ -74,7 +74,7 @@ def run_command(
 
 
 def cancel_conversation_processes(conversation_run_id: str) -> int:
-    """Terminate all tracked subprocesses for the given conversation-run id."""
+    """终止指定会话运行 ID 关联的全部已跟踪子进程。"""
     with _lock:
         processes = list(_conversation_processes.pop(conversation_run_id, set()))
     for proc in processes:

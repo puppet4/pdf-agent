@@ -1,4 +1,4 @@
-"""Metadata info tool - read PDF metadata and statistics."""
+"""读取 PDF 元数据和统计信息。"""
 from __future__ import annotations
 
 from pathlib import Path

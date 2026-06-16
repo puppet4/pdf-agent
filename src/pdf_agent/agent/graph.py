@@ -1,4 +1,10 @@
-"""LangGraph StateGraph construction — agent + custom tool node."""
+"""构建 LangGraph 状态图，负责驱动 agent 与工具节点循环执行。
+
+图结构本身保持简单：
+- `agent` 节点负责调用模型做出下一步决策；
+- `tools` 节点负责执行模型选中的工具并更新文件状态；
+- 条件边决定是否继续下一轮或结束。
+"""
 from __future__ import annotations
 
 import logging
@@ -22,15 +28,15 @@ from pdf_agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-# Reserve tokens for system prompt + response; use the rest for history
+# 为系统提示词和模型回复预留空间，剩余预算用于历史消息。
 MAX_HISTORY_TOKENS = 100_000
-# start summarizing when approaching limit
+# 接近上限时优先摘要较老消息，尽量保留最近几轮原始上下文。
 SUMMARY_THRESHOLD = 80_000
 _encoder: tiktoken.Encoding | None = None
 
 
 def _get_encoder() -> tiktoken.Encoding:
-    """Lazy-load the tiktoken encoder for the configured model."""
+    """按当前模型懒加载 tiktoken 编码器。"""
     global _encoder
     if _encoder is None:
         try:
@@ -41,7 +47,7 @@ def _get_encoder() -> tiktoken.Encoding:
 
 
 def _tiktoken_counter(messages: list) -> int:
-    """Count tokens for a list of LangChain messages using tiktoken."""
+    """使用 tiktoken 估算一组 LangChain 消息的 token 数。"""
     enc = _get_encoder()
     total = 0
     for msg in messages:
@@ -54,20 +60,20 @@ def _tiktoken_counter(messages: list) -> int:
                     total += len(enc.encode(part, disallowed_special=()))
                 elif isinstance(part, dict) and "text" in part:
                     total += len(enc.encode(part["text"], disallowed_special=()))
-        # Overhead per message (role, separators)
+        # 额外补上消息角色、分隔符等协议开销，避免估算过于乐观。
         total += 4
     return total
 
 
 # ---------------------------------------------------------------------------
-# Agent node
+# Agent 节点
 # ---------------------------------------------------------------------------
 
 def _make_agent_node(model_with_tools: ChatOpenAI):
-    """Return the agent node function that calls the LLM."""
+    """生成 agent 节点函数，负责整理上下文并调用 LLM。"""
 
     async def agent_node(state: AgentState) -> dict[str, Any]:
-        # Build dynamic system prompt
+        # 系统提示词依赖当前文件列表，因此每轮都要按最新状态动态构建。
         sys_prompt = build_system_prompt(
             files=state.get("files", []),
             current_files=state.get("current_files", []),
@@ -76,7 +82,7 @@ def _make_agent_node(model_with_tools: ChatOpenAI):
         messages = state["messages"]
         token_count = _tiktoken_counter(messages)
 
-        # If approaching context limit, trim to last N messages
+        # 历史过长时优先裁剪到最近消息，防止直接撞到模型上下文上限。
         if token_count > MAX_HISTORY_TOKENS:
             messages = trim_messages(
                 messages,
@@ -87,7 +93,7 @@ def _make_agent_node(model_with_tools: ChatOpenAI):
                 allow_partial=False,
             )
         elif token_count > SUMMARY_THRESHOLD:
-            # Summarize older messages to save context
+            # 当历史开始逼近上限但还没超限时，先压缩旧消息，尽量保留最近几轮细节。
             old_msgs = messages[:-4] if len(messages) > 4 else []
             recent_msgs = messages[-4:] if len(messages) > 4 else messages
             if old_msgs:
@@ -129,11 +135,11 @@ def _make_agent_node(model_with_tools: ChatOpenAI):
 
 
 # ---------------------------------------------------------------------------
-# Custom tool node
+# 自定义工具节点
 # ---------------------------------------------------------------------------
 
 def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
-    """Return a custom tool node that executes tools and updates file state."""
+    """生成工具节点函数，负责执行工具并把产物写回状态。"""
     tool_map = {t.name: t for t in lc_tools}
 
     async def tool_node(state: AgentState) -> dict[str, Any]:
@@ -148,7 +154,7 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
 
         for call in last_msg.tool_calls:
             tool_name = call["name"]
-            # copy to avoid mutating checkpointed data
+            # 拷贝参数，避免直接修改来自 checkpoint 的原始状态对象。
             tool_args = dict(call["args"])
             call_id = call["id"]
 
@@ -159,8 +165,8 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
                 )
                 continue
 
-            # Inject state and tool_call_id, call underlying func directly
-            # (bypasses schema validation which would strip these extra keys)
+            # 注入运行时状态字段，并直接调用底层协程。
+            # 如果走 schema 校验，这些额外字段会被视为未知参数而被过滤掉。
             tool_args["state"] = state
             tool_args["tool_call_id"] = call_id
 
@@ -186,7 +192,7 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
                 )
             )
 
-            # Parse output files from result string
+            # 从字符串协议中还原产物路径，并同步更新文件列表与当前激活文件集。
             output_files = parsed_result.output_files if parsed_result else []
             if output_files:
                 latest_output_files = output_files
@@ -220,7 +226,7 @@ def _make_tool_node(lc_tools: list, tool_registry: ToolRegistry):
 
 
 def _get_page_count(path: Path) -> int | None:
-    """Try to get PDF page count."""
+    """尽量读取 PDF 页数；失败时返回 `None` 而不是中断工具流程。"""
     try:
         import pikepdf
         with pikepdf.open(path) as pdf:
@@ -230,14 +236,14 @@ def _get_page_count(path: Path) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# Conditional edge
+# 条件边
 # ---------------------------------------------------------------------------
 
 def _should_continue(state: AgentState) -> str:
-    """Route: if last message has tool_calls → 'tools', else → END."""
+    """根据最后一条消息是否包含工具调用决定下一跳。"""
     last_msg = state["messages"][-1]
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-        # Guard against infinite loops
+        # 限制最大循环次数，防止模型持续重复调用工具导致死循环。
         if state.get("step_counter", 0) >= settings.agent_max_iterations:
             return END
         return "tools"
@@ -245,19 +251,18 @@ def _should_continue(state: AgentState) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Public: build the compiled graph
+# 对外公开的图构建入口
 # ---------------------------------------------------------------------------
 
 def build_graph(
     checkpointer: AsyncPostgresSaver | None,
     tool_registry: ToolRegistry,
 ) -> Any:
-    # CompiledStateGraph
-    """Compile the LangGraph StateGraph with agent and tool nodes."""
-    # Adapt tools
+    """编译最终可运行的 LangGraph 状态图。"""
+    # 先把领域工具适配成 LangGraph 可绑定的 StructuredTool。
     lc_tools = list(get_adapted_tool_map(tool_registry).values())
 
-    # Create LLM
+    # 统一在这里创建模型实例，便于后续按配置切换模型参数或 base URL。
     model_kwargs: dict[str, Any] = {
         "model": settings.openai_model,
         "temperature": settings.agent_temperature,
@@ -269,7 +274,7 @@ def build_graph(
     llm = ChatOpenAI(**model_kwargs)
     model_with_tools = llm.bind_tools(lc_tools, parallel_tool_calls=False)
 
-    # Build graph
+    # 图结构保持极简，只保留 agent 与 tools 两个节点。
     graph = StateGraph(AgentState)
     graph.add_node("agent", _make_agent_node(model_with_tools))
     graph.add_node("tools", _make_tool_node(lc_tools, tool_registry))

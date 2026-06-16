@@ -1,4 +1,4 @@
-"""Filesystem-backed conversation message history for degraded state fallback."""
+"""基于文件系统保存的会话历史，用于状态后端降级时兜底恢复。"""
 from __future__ import annotations
 
 from datetime import datetime, timezone

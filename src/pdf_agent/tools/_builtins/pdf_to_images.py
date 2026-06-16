@@ -1,4 +1,4 @@
-"""PDF to images tool - convert PDF pages to images using pdftoppm."""
+"""使用 `pdftoppm` 把 PDF 页面转换成图片。"""
 from __future__ import annotations
 
 import shutil
@@ -87,10 +87,10 @@ class PdfToImagesTool(BaseTool):
         is_all_pages = len(target_pages) == total and target_pages == list(range(total))
 
         if is_all_pages:
-            # Convert all pages directly
+            # 直接转换全部页面
             output_files = self._convert_pdf(pdftoppm_bin, src_path, workdir, fmt, dpi)
         else:
-            # Extract target pages to a temp PDF, then convert
+            # 先把目标页提取到临时 PDF，再执行转换
             with tempfile.NamedTemporaryFile(suffix=".pdf", dir=workdir, delete=False) as tmp:
                 tmp_path = Path(tmp.name)
             with pikepdf.open(src_path) as src:
@@ -118,7 +118,7 @@ class PdfToImagesTool(BaseTool):
         fmt: str,
         dpi: int,
     ) -> list[Path]:
-        # pdftoppm format flags
+        # `pdftoppm` 的输出格式参数
         fmt_flag_map = {"png": "-png", "jpeg": "-jpeg", "webp": "-webp"}
         fmt_flag = fmt_flag_map[fmt]
 
@@ -133,11 +133,11 @@ class PdfToImagesTool(BaseTool):
 
         run_command(cmd)
 
-        # Collect output files (pdftoppm names them: page-01.png, page-02.png, ...)
+        # 收集输出文件，`pdftoppm` 默认会生成如 `page-01.png`、`page-02.png` 的文件名
         ext = fmt if fmt != "jpeg" else "jpg"
         output_files = sorted(workdir.glob(f"page-*.{ext}"))
         if not output_files:
-            # Try alternate extension for jpeg
+            # JPEG 情况下兼容备用扩展名
             output_files = sorted(workdir.glob("page-*.jpeg"))
         if not output_files:
             raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, "pdftoppm produced no output files")

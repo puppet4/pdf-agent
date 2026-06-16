@@ -1,4 +1,4 @@
-"""PDF to Word tool — convert PDF to DOCX using LibreOffice."""
+"""使用 LibreOffice 把 PDF 转成 DOCX。"""
 from __future__ import annotations
 
 import shutil

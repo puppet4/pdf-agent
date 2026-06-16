@@ -1,4 +1,4 @@
-"""Repair tool — attempt to repair a corrupted PDF using Ghostscript."""
+"""尝试使用 Ghostscript 修复损坏的 PDF。"""
 from __future__ import annotations
 
 import shutil

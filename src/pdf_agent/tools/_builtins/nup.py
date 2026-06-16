@@ -1,4 +1,4 @@
-"""N-up tool — arrange multiple PDF pages onto one page (2-up, 4-up, etc.)."""
+"""把多页 PDF 排布到一张纸上，例如 2-up、4-up。"""
 from __future__ import annotations
 
 import shutil
@@ -15,7 +15,7 @@ from pdf_agent.schemas.tool import ParamSpec, ToolInputSpec, ToolManifest, ToolO
 from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools.filenames import localized_output_name
 
-# N-up layout: (columns, rows)
+# N-up 布局定义为：列数、行数
 _LAYOUTS: dict[str, tuple[int, int]] = {
     "2-up": (2, 1),
     "4-up": (2, 2),
@@ -25,7 +25,7 @@ _LAYOUTS: dict[str, tuple[int, int]] = {
 
 
 def _render_page_to_png(pdf_path: Path, page_idx: int, tmpdir: Path, dpi: int = 96) -> Path | None:
-    """Render a single PDF page to PNG using pdftoppm."""
+    """使用 `pdftoppm` 把单页 PDF 渲染成 PNG。"""
     pdftoppm = shutil.which("pdftoppm")
     if not pdftoppm:
         return None

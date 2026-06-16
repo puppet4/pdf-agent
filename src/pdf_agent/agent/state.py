@@ -1,4 +1,4 @@
-"""Graph state definitions for the LangGraph agent."""
+"""定义 LangGraph agent 使用的状态结构。"""
 from __future__ import annotations
 
 from typing import Annotated, NotRequired, TypedDict
@@ -13,14 +13,14 @@ class FileInfo(TypedDict):
     orig_name: str
     mime_type: str
     page_count: int | None
-    # "upload" | tool name that produced it
+    # 取值可能是 `upload`，也可能是生成该文件的工具名。
     source: str
-    # relative path like "step_1/output.pdf" for artifact sources
+    # 当来源是会话产物时，记录类似 `step_1/output.pdf` 的相对路径。
     artifact_path: NotRequired[str]
 
 
 def files_reducer(existing: list[FileInfo], new: list[FileInfo]) -> list[FileInfo]:
-    """Append-only reducer for the files list. Deduplicates by path."""
+    """用于文件列表的追加型 reducer，并按路径去重。"""
     seen = {f["path"] for f in existing}
     result = list(existing)
     for f in new:
@@ -33,7 +33,7 @@ def files_reducer(existing: list[FileInfo], new: list[FileInfo]) -> list[FileInf
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     files: Annotated[list[FileInfo], files_reducer]
-    # latest output file paths (replace reducer)
+    # 当前激活的最新输出文件路径列表，会直接覆盖旧值。
     current_files: list[str]
     conversation_workdir: str
     step_counter: int

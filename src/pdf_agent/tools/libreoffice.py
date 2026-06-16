@@ -1,4 +1,4 @@
-"""Helpers for invoking LibreOffice with an isolated user profile."""
+"""以隔离用户配置目录的方式调用 LibreOffice 的辅助函数。"""
 from __future__ import annotations
 
 import shutil
@@ -39,7 +39,7 @@ def run_libreoffice_conversion(
     profile_dir: Path,
     timeout: int | None = None,
 ) -> tuple[bool, str | None]:
-    """Run LibreOffice conversion and return whether it completed successfully."""
+    """执行一次 LibreOffice 转换，并返回是否成功完成。"""
     try:
         run_command(
             build_libreoffice_command(
@@ -66,7 +66,7 @@ def run_libreoffice_conversion_to_output(
     profile_dir: Path,
     timeout: int | None = None,
 ) -> tuple[bool, str | None]:
-    """Run LibreOffice and normalize its default output name into the requested path."""
+    """执行 LibreOffice，并把默认输出文件名整理为调用方期望的路径。"""
     success, failure_reason = run_libreoffice_conversion(
         lo_bin,
         convert_to=convert_to,

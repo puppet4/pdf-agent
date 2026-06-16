@@ -1,4 +1,4 @@
-"""Helpers for user-facing artifact filenames."""
+"""生成面向用户展示的产物文件名辅助函数。"""
 from __future__ import annotations
 
 import re

@@ -1,4 +1,4 @@
-"""Remove blank pages tool — detect and remove near-blank pages from a PDF."""
+"""检测并删除 PDF 中接近空白的页面。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,7 +13,7 @@ from pdf_agent.tools.filenames import localized_output_name
 
 
 def _is_blank(page: pikepdf.Page, threshold: float = 0.99) -> bool:
-    """Check if a page is blank by rendering a tiny thumbnail and checking whiteness."""
+    """通过渲染小缩略图并检测白度来判断页面是否近似空白。"""
     try:
         import shutil
         import tempfile
@@ -23,7 +23,7 @@ def _is_blank(page: pikepdf.Page, threshold: float = 0.99) -> bool:
             return False
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "page.png"
-            # Write single page to temp PDF then render
+            # 先把单页写入临时 PDF，再进行渲染检测
             with pikepdf.Pdf.new() as tmp:
                 tmp.pages.append(page)
                 tmp_pdf = Path(td) / "tmp.pdf"
@@ -99,7 +99,7 @@ class RemoveBlankPagesTool(BaseTool):
             if len(blank_indices) >= total:
                 raise ToolError(ErrorCode.INVALID_PARAMS, "Cannot remove all pages — no non-blank pages found")
 
-            # Remove in reverse order to preserve indices
+            # 按倒序删除页面，避免前面删除后影响后续索引
             for idx in sorted(blank_indices, reverse=True):
                 del pdf.pages[idx]
 

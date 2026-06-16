@@ -1,4 +1,4 @@
-"""Header/Footer tool — add text header and/or footer to PDF pages."""
+"""为 PDF 页面添加文本页眉和/或页脚。"""
 from __future__ import annotations
 
 import io

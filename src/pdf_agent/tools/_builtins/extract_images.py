@@ -1,4 +1,4 @@
-"""Extract embedded raster images from a PDF."""
+"""提取 PDF 内嵌的位图图片。"""
 from __future__ import annotations
 
 from pathlib import Path

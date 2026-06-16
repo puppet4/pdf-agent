@@ -1,4 +1,4 @@
-"""API middleware — authentication, rate limiting, request tracing."""
+"""API 中间件集合，负责鉴权、限流和请求链路追踪。"""
 from __future__ import annotations
 
 import asyncio
@@ -80,7 +80,7 @@ def _should_rate_limit(request: Request) -> bool:
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
-    """Attach a unique request ID to every request for log tracing."""
+    """为每个请求附加唯一 request ID，便于日志链路追踪。"""
 
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
@@ -95,7 +95,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
-    """Require API key headers according to configured auth policy."""
+    """按配置的认证策略校验 API Key。"""
 
     async def dispatch(self, request: Request, call_next):
         policy = settings.auth_policy
@@ -126,7 +126,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """File-backed sliding window rate limiter for mutating API routes."""
+    """基于文件状态实现的滑动窗口限流器，仅作用于写接口。"""
 
     _instance: RateLimitMiddleware | None = None
 
@@ -135,7 +135,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         RateLimitMiddleware._instance = self
 
     def reset(self):
-        """Clear all tracked requests (useful for testing)."""
+        """清空限流状态，主要供测试场景使用。"""
         with _rate_limit_lock():
             path = settings.data_dir / "rate_limit.json"
             path.unlink(missing_ok=True)
@@ -161,7 +161,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _check_and_record(client_key: str) -> bool:
-        """Synchronous rate-limit check — runs in a thread to avoid blocking the event loop."""
+        """同步执行限流检查，并记录当前请求。
+
+        这里会放到线程里运行，避免文件 IO 阻塞事件循环。
+        """
         now = time.time()
         window_start = now - 60
 

@@ -1,4 +1,4 @@
-"""Idempotency coordination for write APIs."""
+"""为写接口提供幂等协调能力。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -177,7 +177,7 @@ class IdempotencyService:
             )
 
     async def reconcile_file_upload_processing(self) -> IdempotencyReconcileStats:
-        """Fix stale PROCESSING idempotency records using persisted file metadata as source of truth."""
+        """以已持久化的文件元数据为准，修复卡在 PROCESSING 状态的幂等记录。"""
         now = _utcnow()
         stale_timeout = timedelta(seconds=settings.idempotency_processing_timeout_sec)
         fixed_success = 0

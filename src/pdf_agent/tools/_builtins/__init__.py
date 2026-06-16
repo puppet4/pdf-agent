@@ -1,11 +1,11 @@
-"""Built-in tools package."""
+"""内建工具集合包。"""
 from __future__ import annotations
 
 from pdf_agent.tools.base import BaseTool
 
 
 def get_builtin_tools() -> list[BaseTool]:
-    """Return all built-in tool instances."""
+    """返回全部内建工具实例。"""
     from pdf_agent.tools._builtins.merge import MergeTool
     from pdf_agent.tools._builtins.split import SplitTool
     from pdf_agent.tools._builtins.rotate import RotateTool

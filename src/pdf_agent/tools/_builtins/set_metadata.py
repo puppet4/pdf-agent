@@ -1,4 +1,4 @@
-"""Set Metadata tool — write PDF metadata fields."""
+"""写入 PDF 元数据字段。"""
 from __future__ import annotations
 
 from pathlib import Path

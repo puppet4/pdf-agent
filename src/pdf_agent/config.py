@@ -38,16 +38,16 @@ class Settings(BaseSettings):
         "extra": "ignore",
     }
 
-    # --- App ---
+    # --- 应用基础配置 ---
     app_name: str = "PDF Agent"
     debug: bool = False
     expose_api_docs: bool = False
     environment: Literal["development", "test", "production"] = "development"
 
-    # --- Database (async for FastAPI) ---
+    # --- 数据库配置（FastAPI 异步连接） ---
     database_url: str = "postgresql+asyncpg://localhost:5432/pdf_agent"
 
-    # --- OpenAI / LLM ---
+    # --- OpenAI / LLM 配置 ---
     openai_api_key: str = ""
     openai_base_url: str | None = None
     openai_model: str = "gpt-4o"
@@ -55,62 +55,62 @@ class Settings(BaseSettings):
     agent_max_iterations: int = 20
     disable_agent_persistence: bool = False
 
-    # --- Storage ---
+    # --- 存储目录配置 ---
     data_dir: Path = Path("data")
 
-    # --- Limits ---
+    # --- 资源限制 ---
     max_upload_size_mb: int = 200
     max_page_count: int = 2000
-    # 30 min
+    # 外部命令最长允许执行 30 分钟，防止 OCR/转换进程无界挂起。
     external_cmd_timeout_sec: int = 1800
     libreoffice_timeout_sec: int = 120
 
-    # --- Access Control ---
+    # --- 访问控制 ---
     auth_mode: Literal["required", "optional", "disabled"] = "required"
     api_key: str = _UNSET_API_KEY
     api_key_header_name: str = "X-API-Key"
     exempt_auth_paths: str = "/healthz,/metrics"
     min_api_key_length: int = 24
 
-    # --- CORS ---
-    # comma-separated allowed origins
+    # --- CORS 配置 ---
+    # 允许的来源列表，使用逗号分隔；`*` 表示全部放开。
     cors_origins: str = "*"
 
-    # --- LangSmith ---
+    # --- LangSmith 配置 ---
     langsmith_api_key: str = ""
     langsmith_project: str = "pdf-agent"
 
-    # --- Rate Limiting ---
-    # max chat requests per minute per IP, 0 = disabled
+    # --- 限流配置 ---
+    # 每个来源每分钟允许的写请求数；设为 0 表示关闭限流。
     rate_limit_rpm: int = 200
 
-    # --- Cleanup ---
-    # delete expired conversation workdirs older than this
+    # --- 清理策略 ---
+    # 超过该时长的会话工作目录会被后台清理。
     conversation_ttl_hours: int = 72
     max_storage_gb: int = 10
 
-    # --- Observability ---
-    # if set, enable Sentry error tracking
+    # --- 可观测性 ---
+    # 配置后开启 Sentry 错误追踪。
     sentry_dsn: str = ""
     metrics_enabled: bool = True
     degrade_on_state_backend_failure: bool = True
 
-    # --- i18n ---
-    # "en" or "zh"
+    # --- 国际化 ---
+    # 默认语言，可选 `en` 或 `zh`。
     default_locale: str = "en"
 
-    # --- Compatibility ---
+    # --- 兼容层配置 ---
     legacy_api_compatibility_mode: Literal["disabled", "bridge"] = "disabled"
     legacy_api_phase: Literal["deprecation", "warning", "sunset"] = "sunset"
     legacy_api_sunset_date: str = "2026-12-31"
     legacy_api_migration_url: str = "/docs/migrations/legacy-api"
 
-    # --- Idempotency ---
+    # --- 幂等配置 ---
     idempotency_ttl_hours: int = 24
     idempotency_processing_timeout_sec: int = 900
     idempotency_max_key_length: int = 128
 
-    # --- Caching ---
+    # --- 缓存配置 ---
     storage_scan_cache_ttl_sec: int = 30
     conversation_stats_cache_ttl_sec: int = 30
 

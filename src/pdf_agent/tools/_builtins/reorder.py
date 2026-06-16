@@ -1,4 +1,4 @@
-"""Reorder tool - reorder pages in a PDF."""
+"""重新排列 PDF 页面顺序。"""
 from __future__ import annotations
 
 from pathlib import Path

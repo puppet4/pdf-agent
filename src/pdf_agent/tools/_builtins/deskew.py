@@ -1,4 +1,4 @@
-"""Deskew tool is intentionally disabled; use OCR deskew instead."""
+"""该去倾斜工具已被有意禁用，请改用 OCR 去倾斜流程。"""
 from __future__ import annotations
 
 from pathlib import Path

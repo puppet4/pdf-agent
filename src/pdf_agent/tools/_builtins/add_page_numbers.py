@@ -1,4 +1,4 @@
-"""Add page numbers tool - add page numbers to PDF pages."""
+"""给 PDF 页面添加页码的工具。"""
 from __future__ import annotations
 
 import io
@@ -126,7 +126,7 @@ class AddPageNumbersTool(BaseTool):
         )
 
 
-# points from edge
+# 距离页面边缘的点数偏移
 _MARGIN = 30
 
 
@@ -151,7 +151,7 @@ def _make_number_overlay(
         c.drawCentredString(page_w / 2, y, text)
     elif "left" in position:
         c.drawString(_MARGIN, y, text)
-    # right
+    # 右侧对齐
     else:
         c.drawRightString(page_w - _MARGIN, y, text)
 

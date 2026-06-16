@@ -1,4 +1,4 @@
-"""Auto-rotate tool — detect content orientation and rotate pages to upright."""
+"""自动检测页面内容朝向，并将其旋转为正向。"""
 from __future__ import annotations
 
 import math
@@ -29,7 +29,7 @@ def _is_low_text_osd_error(exc: ToolError) -> bool:
 
 
 def _detect_rotation(image_path: Path) -> tuple[int, float | None]:
-    """Use tesseract OSD to detect required rotation (degrees, confidence)."""
+    """使用 tesseract OSD 检测页面需要旋转的角度及置信度。"""
     tesseract = shutil.which("tesseract")
     if not tesseract:
         return 0, None
@@ -72,7 +72,7 @@ def _iter_pdf_chars(node, lt_char_type, lt_container_type):
 
 
 def _detect_rotation_from_pdf_text(pdf_path: Path, page_idx: int) -> tuple[int, float | None]:
-    """Fallback to PDF text-layer orientation when OSD cannot classify sparse pages."""
+    """当 OSD 无法识别稀疏页面时，回退到 PDF 文本层朝向判断。"""
     try:
         from pdfminer.high_level import extract_pages
         from pdfminer.layout import LTChar, LTContainer
@@ -101,7 +101,7 @@ def _detect_rotation_from_pdf_text(pdf_path: Path, page_idx: int) -> tuple[int, 
 
 
 def _ocr_rotation_score(image_path: Path, angle: int) -> tuple[float, int] | None:
-    """Score a candidate correction angle using regular OCR when OSD is unreliable."""
+    """当 OSD 不可靠时，用常规 OCR 为候选旋转角打分。"""
     tesseract = shutil.which("tesseract")
     if not tesseract:
         return None
@@ -157,7 +157,7 @@ def _ocr_rotation_score(image_path: Path, angle: int) -> tuple[float, int] | Non
 
 
 def _detect_rotation_with_ocr_fallback(image_path: Path) -> tuple[int, float | None]:
-    """Fallback orientation detection by comparing OCR confidence across 4 rotations."""
+    """通过比较四个旋转方向的 OCR 置信度来做兜底朝向检测。"""
     best_score: tuple[int, float, int] | None = None
 
     for angle in (0, 90, 180, 270):
@@ -177,7 +177,7 @@ def _detect_rotation_with_ocr_fallback(image_path: Path) -> tuple[int, float | N
 
 
 def _render_page_png(pdf_path: Path, page_idx: int, tmpdir: Path) -> Path | None:
-    """Render a single PDF page to PNG for OSD analysis."""
+    """把单页 PDF 渲染成 PNG，供 OSD 分析使用。"""
     pdftoppm = shutil.which("pdftoppm")
     if not pdftoppm:
         return None

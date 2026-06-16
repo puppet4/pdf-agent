@@ -1,4 +1,4 @@
-"""Barcode tool — insert a 1D barcode onto PDF pages."""
+"""在 PDF 页面上插入一维条形码。"""
 from __future__ import annotations
 
 import io
@@ -61,7 +61,7 @@ class BarcodeTool(BaseTool):
         output_path = workdir / localized_output_name(inputs[0], "已加条形码")
         margin = 15
 
-        # Generate barcode image
+        # 生成条形码图片
         try:
             bc_class = barcode.get_barcode_class(params["barcode_type"])
             bc = bc_class(params["content"], writer=ImageWriter())

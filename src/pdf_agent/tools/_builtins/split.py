@@ -1,4 +1,4 @@
-"""Split tool - split PDF by page ranges, chunks, or bookmarks."""
+"""按页码范围、固定分块或书签拆分 PDF。"""
 from __future__ import annotations
 
 import re

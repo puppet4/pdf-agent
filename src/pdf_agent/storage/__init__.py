@@ -1,4 +1,4 @@
-"""Local file storage management."""
+"""本地文件存储管理。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -27,14 +27,14 @@ class StorageTrimResult:
 
 
 class LocalStorage:
-    """Manages file storage on local disk."""
+    """管理本地磁盘上的上传文件与会话目录。"""
 
     def __init__(self) -> None:
         self._size_cache_lock = threading.Lock()
         self._size_cache: dict[str, tuple[float, tuple[bool, int, int], int]] = {}
 
     def save_upload(self, file_id: uuid.UUID, filename: str, content: bytes) -> Path:
-        """Save an uploaded file atomically and return its storage path."""
+        """以原子方式保存上传文件，并返回最终存储路径。"""
         dest_dir = settings.upload_dir / str(file_id)
         dest_dir.mkdir(parents=True, exist_ok=True)
         safe_name = Path(filename).name or "upload.bin"
@@ -50,7 +50,7 @@ class LocalStorage:
         return dest
 
     def save_upload_from_path(self, file_id: uuid.UUID, filename: str, source_path: Path) -> Path:
-        """Persist a prepared upload file atomically from a temporary location."""
+        """把已准备好的临时上传文件原子化移动到正式存储位置。"""
         dest_dir = settings.upload_dir / str(file_id)
         dest_dir.mkdir(parents=True, exist_ok=True)
         safe_name = Path(filename).name or "upload.bin"
@@ -97,7 +97,7 @@ class LocalStorage:
             self.invalidate_size_cache()
 
     def list_expired_conversations(self) -> list[str]:
-        """Return conversation ids whose workdirs are older than the retention window."""
+        """返回超出保留窗口的会话工作目录 ID 列表。"""
         conversations_dir = settings.conversations_dir
         if not conversations_dir.exists():
             return []
@@ -115,7 +115,7 @@ class LocalStorage:
         return expired
 
     def cleanup_expired_conversations(self) -> int:
-        """Remove expired conversation workdirs. Returns count removed."""
+        """删除过期会话工作目录，并返回删除数量。"""
         removed = 0
         for conversation_id in self.list_expired_conversations():
             try:
@@ -127,7 +127,7 @@ class LocalStorage:
         return removed
 
     def cleanup_expired_uploads(self) -> list[str]:
-        """Remove uploaded files older than the retention window and return removed upload ids."""
+        """删除超过保留窗口的上传目录，并返回被删除的上传 ID。"""
         upload_dir = settings.upload_dir
         if not upload_dir.exists():
             return []
@@ -213,7 +213,7 @@ class LocalStorage:
         include_conversations: bool = True,
         include_uploads: bool = True,
     ) -> StorageTrimResult:
-        """Delete oldest storage dirs first until under the configured storage limit."""
+        """按最旧优先策略裁剪存储目录，直到低于配置的容量上限。"""
         limit = self.storage_limit_bytes()
         current = self.dir_size_bytes(force_refresh=True)
         if current <= limit:
@@ -250,7 +250,7 @@ class LocalStorage:
         return result
 
     def trim_storage_lru(self) -> int:
-        """Backward-compatible count-only wrapper for LRU trimming."""
+        """兼容旧接口的包装器，仅返回 LRU 裁剪删除数量。"""
         return self.trim_storage_lru_details().total_removed
 
 

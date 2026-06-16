@@ -1,4 +1,4 @@
-"""Stamp tool — add a stamp/seal image to PDF pages."""
+"""在 PDF 页面上叠加图章或印章图片。"""
 from __future__ import annotations
 
 import io
@@ -80,7 +80,7 @@ class StampTool(BaseTool):
     ) -> ToolResult:
         params = self.validate(params)
 
-        # Identify PDF and image inputs
+        # 区分输入中的 PDF 文件和图章图片
         pdf_path = img_path = None
         for p in inputs:
             suffix = p.suffix.lower()
@@ -108,16 +108,16 @@ class StampTool(BaseTool):
 
             for idx in pages:
                 page = pdf.pages[idx]
-                # Get page dimensions
+                # 读取当前页面尺寸
                 mediabox = page.mediabox
                 pw = float(mediabox[2]) - float(mediabox[0])
                 ph = float(mediabox[3]) - float(mediabox[1])
 
-                # Compute stamp dimensions
+                # 计算图章绘制尺寸
                 sw = pw * params["scale"]
                 sh = sw * stamp_img.height / stamp_img.width
 
-                # Compute position
+                # 计算图章放置位置
                 margin = 20
                 pos = params["position"]
                 if pos == "center":
@@ -128,14 +128,14 @@ class StampTool(BaseTool):
                     x, y = pw - sw - margin, ph - sh - margin
                 elif pos == "bottom-left":
                     x, y = margin, margin
-                # bottom-right
+                # 右下角
                 else:
                     x, y = pw - sw - margin, margin
 
-                # Build overlay PDF
+                # 生成用于叠加的覆盖层 PDF
                 buf = io.BytesIO()
                 c = canvas.Canvas(buf, pagesize=(pw, ph))
-                # Save stamp image to temp bytes
+                # 先把图章图片写入临时字节缓冲
                 img_buf = io.BytesIO()
                 stamp_img.save(img_buf, format="PNG")
                 img_buf.seek(0)
@@ -146,7 +146,7 @@ class StampTool(BaseTool):
                 c.save()
                 buf.seek(0)
 
-                # Merge overlay onto page
+                # 把覆盖层合并到当前页面上
                 with pikepdf.open(buf) as overlay_pdf:
                     overlay_page = overlay_pdf.pages[0]
                     pikepdf.Page(page).add_overlay(overlay_page)

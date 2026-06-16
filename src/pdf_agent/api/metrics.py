@@ -1,4 +1,4 @@
-"""Prometheus metrics collection and /metrics endpoint."""
+"""Prometheus 指标采集与 `/metrics` 暴露入口。"""
 from __future__ import annotations
 
 import re
@@ -11,21 +11,21 @@ from starlette.middleware.base import BaseHTTPMiddleware
 router = APIRouter(tags=["metrics"])
 
 # ---------------------------------------------------------------------------
-# Simple metric storage (no external dependency required)
+# 轻量级进程内指标存储
 # ---------------------------------------------------------------------------
 
 class _Metrics:
-    """In-process metrics store with Prometheus text exposition."""
+    """进程内指标存储器，并负责输出 Prometheus 文本格式。"""
 
     def __init__(self):
         self._lock = threading.Lock()
-        # method:path:status
+        # 请求计数键格式：method:path:status
         self.request_count: dict[str, int] = {}
-        # method:path -> (count, total)
+        # 请求耗时键格式：method:path -> (次数, 总耗时)
         self.request_duration: dict[str, tuple[int, float]] = {}
-        # tool_name
+        # 工具调用计数键：tool_name
         self.tool_count: dict[str, int] = {}
-        # tool_name -> (count, total)
+        # 工具耗时键格式：tool_name -> (次数, 总耗时)
         self.tool_duration: dict[str, tuple[int, float]] = {}
         self.conversation_run_count: dict[str, int] = {}
         self.conversation_duration: dict[str, tuple[int, float]] = {}
@@ -82,7 +82,7 @@ class _Metrics:
 
     @staticmethod
     def _esc(value: str) -> str:
-        """Escape a Prometheus label value."""
+        """转义 Prometheus label 值中的特殊字符。"""
         return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
     def _exposition_unlocked(self) -> str:
@@ -90,7 +90,7 @@ class _Metrics:
         lines: list[str] = ["# HELP pdf_agent_http_requests_total Total HTTP requests",
                             "# TYPE pdf_agent_http_requests_total counter"]
 
-        # Request counter
+        # HTTP 请求总数
         for key, count in sorted(self.request_count.items()):
             try:
                 method, path, status = key.split(":", 2)
@@ -98,7 +98,7 @@ class _Metrics:
                 continue
             lines.append(f'pdf_agent_http_requests_total{{method="{_esc(method)}",path="{_esc(path)}",status="{_esc(status)}"}} {count}')
 
-        # Request duration
+        # HTTP 请求耗时
         lines.append("# HELP pdf_agent_http_request_duration_seconds Request duration")
         lines.append("# TYPE pdf_agent_http_request_duration_seconds summary")
         for key, (count, total) in sorted(self.request_duration.items()):
@@ -106,13 +106,13 @@ class _Metrics:
             lines.append(f'pdf_agent_http_request_duration_seconds_sum{{method="{_esc(method)}",path="{_esc(path)}"}} {total:.4f}')
             lines.append(f'pdf_agent_http_request_duration_seconds_count{{method="{_esc(method)}",path="{_esc(path)}"}} {count}')
 
-        # Tool counter
+        # 工具调用总数
         lines.append("# HELP pdf_agent_tool_calls_total Total tool invocations")
         lines.append("# TYPE pdf_agent_tool_calls_total counter")
         for name, count in sorted(self.tool_count.items()):
             lines.append(f'pdf_agent_tool_calls_total{{tool="{_esc(name)}"}} {count}')
 
-        # Tool duration
+        # 工具执行耗时
         lines.append("# HELP pdf_agent_tool_duration_seconds Tool run duration")
         lines.append("# TYPE pdf_agent_tool_duration_seconds summary")
         for name, (count, total) in sorted(self.tool_duration.items()):
@@ -163,7 +163,7 @@ class _Metrics:
                 f'pdf_agent_idempotency_events_total{{scope="{_esc(scope)}",action="{_esc(action)}"}} {count}'
             )
 
-        # LLM tokens
+        # 模型 token 消耗
         lines.append("# HELP pdf_agent_llm_tokens_total Total LLM tokens")
         lines.append("# TYPE pdf_agent_llm_tokens_total counter")
         lines.append(f'pdf_agent_llm_tokens_total{{direction="input"}} {self.llm_tokens_in}')
@@ -196,11 +196,11 @@ def _normalize_metric_path(path: str, route_path: str | None = None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Middleware
+# 中间件
 # ---------------------------------------------------------------------------
 
 class MetricsMiddleware(BaseHTTPMiddleware):
-    """Record request count and latency for each endpoint."""
+    """为每个接口记录请求次数与耗时。"""
 
     async def dispatch(self, request: Request, call_next):
         start = time.time()
@@ -216,7 +216,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
 
 # ---------------------------------------------------------------------------
-# Endpoint
+# 接口
 # ---------------------------------------------------------------------------
 
 @router.get("/metrics")

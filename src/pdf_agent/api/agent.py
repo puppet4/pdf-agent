@@ -1,4 +1,4 @@
-"""Conversation API — chat streaming and artifact access."""
+"""对话 API，负责 SSE 流式消息、会话历史和生成产物访问。"""
 from __future__ import annotations
 
 import asyncio
@@ -37,12 +37,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["conversations"])
 
-# Keys to strip from tool_start args (injected by our tool node, not user-facing)
+# 这些字段由后端工具节点注入，不应原样暴露给前端。
 _INTERNAL_KEYS = {"state", "tool_call_id", "progress_reporter"}
 _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SENSITIVE_ARG_RE = re.compile(r"(password|secret|token|api[_-]?key|authorization)", re.IGNORECASE)
 
-# Heartbeat interval during a tool run (seconds)
+# 工具运行期间的心跳间隔，前端可据此判断连接仍然存活。
 _HEARTBEAT_INTERVAL = 5.0
 _DEFAULT_CONVERSATION_TITLE = "新会话"
 _MAX_CONVERSATION_TITLE_LENGTH = 48
@@ -60,7 +60,7 @@ class ConversationMessagesLoadResult:
 
 
 # ---------------------------------------------------------------------------
-# Request / response schemas
+# 请求 / 响应模型
 # ---------------------------------------------------------------------------
 
 class MessageCreateRequest(BaseModel):
@@ -70,11 +70,11 @@ class MessageCreateRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# 辅助函数
 # ---------------------------------------------------------------------------
 
 async def _resolve_uploaded_files(file_ids: list[str]) -> list[FileInfo]:
-    """Look up FileRecords by id and convert to FileInfo (batch query)."""
+    """批量查询上传文件，并转换成 agent 可直接消费的 `FileInfo`。"""
     if not file_ids:
         return []
     parsed_ids: list[uuid.UUID] = []
@@ -222,7 +222,7 @@ def _build_message_input_state(
 
 
 def _sse_event(event: str, data: dict) -> str:
-    """Format a Server-Sent Event."""
+    """格式化一条标准 SSE 事件。"""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
@@ -244,7 +244,7 @@ def _format_agent_stream_error(exc: Exception) -> str:
 
 
 def _sanitize_tool_args(args: dict) -> dict:
-    """Remove internal keys that should not be exposed to the client."""
+    """移除不应暴露给前端的内部工具参数。"""
     sanitized: dict = {}
     for key, value in args.items():
         if key in _INTERNAL_KEYS:
@@ -281,7 +281,7 @@ def _tool_client_summary(tool_name: str, parsed_result) -> dict[str, object]:
 
 
 def _paths_to_download_urls(conversation_id: str, file_paths: list[str]) -> list[str]:
-    """Convert absolute file paths to conversation artifact URLs."""
+    """把绝对文件路径转换成会话产物下载 URL。"""
     urls = []
     conversation_dir = _resolve_conversation_dir(conversation_id)
     for fp in file_paths:
@@ -302,14 +302,14 @@ def _paths_to_download_urls(conversation_id: str, file_paths: list[str]) -> list
 
 
 def _validate_conversation_id(conversation_id: str, *, status_code: int) -> str:
-    """Allow only simple conversation ids that stay within the conversation storage directory."""
+    """校验会话 ID 格式，确保后续路径解析保持在会话目录内。"""
     if not conversation_id or not _CONVERSATION_ID_RE.fullmatch(conversation_id):
         raise HTTPException(status_code=status_code, detail="Invalid conversation_id")
     return conversation_id
 
 
 def _resolve_conversation_dir(conversation_id: str) -> Path:
-    """Resolve a conversation directory and reject path traversal."""
+    """解析会话目录，并拒绝任何目录穿越输入。"""
     safe_conversation_id = _validate_conversation_id(conversation_id, status_code=400)
     base_dir = settings.conversations_dir.resolve()
     candidate = (base_dir / safe_conversation_id).resolve()
@@ -325,7 +325,7 @@ def _resolve_conversation_artifact_path(
     artifact_path: str,
     filename: str | None = None,
 ) -> Path:
-    """Resolve a file inside a conversation directory and reject traversal."""
+    """解析会话产物路径，并拒绝目录穿越或越界访问。"""
     if filename is not None:
         artifact_path = f"{artifact_path}/{filename}"
     if not artifact_path or artifact_path.startswith("/") or ".." in Path(artifact_path).parts:
@@ -342,7 +342,7 @@ def _resolve_conversation_artifact_path(
 
 
 def _extract_output_files(output: str) -> list[str]:
-    """Extract file paths from tool output string."""
+    """从工具输出字符串协议中提取产物文件路径。"""
     if not isinstance(output, str):
         return []
     return parse_tool_result_payload(output).output_files
@@ -478,7 +478,7 @@ def _is_state_backend_error(exc: Exception) -> bool:
 
 
 async def _load_conversation_messages_from_graph(conversation_id: str, request: Request) -> list[dict]:
-    """Load persisted conversation messages from LangGraph state."""
+    """从 LangGraph 持久化状态中恢复会话消息。"""
     graph = request.app.state.graph
     messages: list[dict] = []
     if graph is None:
@@ -491,6 +491,7 @@ async def _load_conversation_messages_from_graph(conversation_id: str, request: 
         pending_output_files: list[str] = []
         for msg in state.values.get("messages", []):
             if msg.type == "tool":
+                # 工具消息本身不直接展示，但它携带的产物路径需要挂到后续 AI 回复上。
                 parsed = parse_tool_result_payload(
                     msg.content if isinstance(getattr(msg, "content", ""), str) else ""
                 )
@@ -531,6 +532,7 @@ async def _load_conversation_messages(
     *,
     conversation_dir: Path,
 ) -> ConversationMessagesLoadResult:
+    """优先从 LangGraph 状态恢复会话；必要时退化到本地历史文件。"""
     if request.app.state.graph is None:
         fallback_messages = load_history_messages(conversation_dir)
         warning = "Conversation state backend is unavailable; returned local history only"
@@ -613,12 +615,12 @@ def _list_artifacts(conversation_dir: Path, conversation_id: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Conversation endpoints
+# 会话接口
 # ---------------------------------------------------------------------------
 
 
 def _list_conversations_sync() -> list[dict]:
-    """Synchronous filesystem scan — call via asyncio.to_thread()."""
+    """同步扫描会话目录；外层应通过 `asyncio.to_thread()` 调用。"""
     conversations_dir = settings.conversations_dir
     if not conversations_dir.exists():
         return []
@@ -637,7 +639,7 @@ def _list_conversations_sync() -> list[dict]:
 
 @router.get("/api/conversations")
 async def list_conversations(page: int = 1, limit: int = 100):
-    """List all conversations."""
+    """分页列出全部会话。"""
     all_conversations = await asyncio.to_thread(_list_conversations_sync)
     if not all_conversations:
         return {"conversations": [], "total": 0, "page": 1, "limit": limit}
@@ -651,7 +653,7 @@ async def list_conversations(page: int = 1, limit: int = 100):
 
 @router.post("/api/conversations")
 async def create_conversation():
-    """Create an empty conversation."""
+    """创建一个空会话目录，并返回初始元数据。"""
     conversation_id = str(uuid.uuid4())
     conversation_dir = _resolve_conversation_dir(conversation_id)
     conversation_dir.mkdir(parents=True, exist_ok=False)
@@ -663,7 +665,7 @@ async def create_conversation():
 
 @router.get("/api/conversations/{conversation_id}")
 async def get_conversation(conversation_id: str, request: Request):
-    """Get conversation details including persisted message history."""
+    """获取单个会话详情，包括已持久化的消息历史。"""
     conversation_dir = _resolve_conversation_dir(conversation_id)
     if not conversation_dir.exists():
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -686,7 +688,7 @@ async def get_conversation(conversation_id: str, request: Request):
 
 @router.delete("/api/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str, request: Request):
-    """Delete a conversation and its persisted state."""
+    """删除会话目录，并尽量同步清理其持久化状态。"""
     conversation_dir = _resolve_conversation_dir(conversation_id)
     if not conversation_dir.exists():
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -709,7 +711,7 @@ async def delete_conversation(conversation_id: str, request: Request):
 
 @router.get("/api/conversations/{conversation_id}/artifacts")
 async def list_conversation_artifacts(conversation_id: str):
-    """List generated artifacts for a conversation."""
+    """列出某个会话已经生成的全部产物。"""
     conversation_dir = _resolve_conversation_dir(conversation_id)
     if not conversation_dir.exists():
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -722,7 +724,7 @@ async def download_conversation_artifact(
     artifact_path: str,
     inline: bool = Query(False, description="Return with inline Content-Disposition for preview"),
 ):
-    """Download a generated artifact for a conversation."""
+    """下载某个会话产物文件。"""
     conversation_dir = _resolve_conversation_dir(conversation_id)
     if not conversation_dir.exists():
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -747,7 +749,7 @@ def _idempotency_replay_stream(payload: dict[str, object]):
 
 @router.post("/api/conversations/{conversation_id}/messages")
 async def create_message(conversation_id: str, req: MessageCreateRequest, request: Request):
-    """Stream a conversation turn with the LangGraph agent via SSE."""
+    """发起一轮对话，并通过 SSE 持续推送 token、进度和产物事件。"""
     graph = request.app.state.graph
     if graph is None:
         raise HTTPException(status_code=503, detail="Agent not initialized")
@@ -817,9 +819,9 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
 
     conversation_run_id = f"{conversation_id}:{uuid.uuid4().hex}"
 
-    # Resolve uploaded files
+    # 先解析用户显式选择的上传文件与产物文件，再组装这轮对话的输入集。
     uploaded_files = await _resolve_uploaded_files(req.file_ids)
-    # Create conversation workdir only after request validation succeeds
+    # 只有在请求校验通过后才创建/使用会话目录，避免无效请求污染磁盘。
     conversation_workdir = _resolve_conversation_dir(conversation_id)
     conversation_workdir.mkdir(parents=True, exist_ok=True)
     message_named_artifact_paths = _resolve_message_named_artifact_paths(conversation_workdir, req.message, conversation_id=conversation_id)
@@ -830,7 +832,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
     if current_title == _DEFAULT_CONVERSATION_TITLE:
         _write_conversation_title(conversation_workdir, req.message)
 
-    # Build input state
+    # 组装传给 LangGraph 的输入状态，并把仅供模型消费的辅助信息放进 additional_kwargs。
     selected_input_summaries = [
         _serialize_selected_input(file_info, conversation_id)
         for file_info in selected_inputs
@@ -877,7 +879,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
     async def event_stream():
         yield _sse_event("conversation", {"conversation_id": conversation_id})
 
-        # Import progress queue helpers
+        # 进度队列与 SSE 共用同一会话运行 ID，便于工具层和接口层解耦。
         from pdf_agent.agent.tools_adapter import get_progress_queue, release_progress_queue
         progress_queue = get_progress_queue(conversation_run_id)
         stream_iter = graph.astream_events(input_state, config=config, version="v2").__aiter__()
@@ -890,6 +892,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
         stream_error_message = ""
 
         def drain_progress_updates() -> list[dict[str, object]]:
+            """尽可能多地取出工具进度更新，避免队列积压。"""
             updates: list[dict[str, object]] = []
             while True:
                 try:
@@ -925,7 +928,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
 
                 kind = event["event"]
 
-                # LLM token streaming
+                # 模型流式 token 直接透传给前端，用于逐字显示回复。
                 if kind == "on_chat_model_stream":
                     chunk = event["data"]["chunk"]
                     if chunk.content:
@@ -943,7 +946,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
                     })
                     last_heartbeat_at = time.perf_counter()
 
-                # Tool end — only expose output files, not internal tool details
+                # 工具结束时只暴露用户关心的日志摘要和产物，不泄露内部运行时细节。
                 elif kind == "on_tool_end":
                     for update in drain_progress_updates():
                         yield _sse_event("progress", {
@@ -990,6 +993,7 @@ async def create_message(conversation_id: str, req: MessageCreateRequest, reques
             logger.exception("Agent stream error")
             yield _sse_event("error", {"message": stream_error_message})
         finally:
+            # 无论成功、失败还是取消，都要补写本地历史并收尾幂等状态，保证后续恢复一致。
             metrics.record_conversation_run(
                 status=run_status,
                 duration=time.perf_counter() - started_at,

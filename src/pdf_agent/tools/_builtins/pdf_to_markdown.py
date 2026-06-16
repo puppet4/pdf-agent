@@ -1,4 +1,4 @@
-"""PDF to Markdown tool — extract text with structure using pdfminer."""
+"""使用 pdfminer 提取带结构的文本，并输出为 Markdown。"""
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Files API - upload, list, download files."""
+"""文件 API，负责上传、列出、下载和预览用户文件。"""
 from __future__ import annotations
 
 import asyncio
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_storage_path(record_storage_path: str) -> Path:
-    """Resolve and validate that storage_path is within upload_dir."""
+    """解析并校验存储路径，确保目标文件位于上传目录内。"""
     path = Path(record_storage_path).resolve()
     upload_root = settings.upload_dir.resolve()
     if not path.is_relative_to(upload_root):
@@ -46,7 +46,7 @@ def _resolve_storage_path(record_storage_path: str) -> Path:
 _content_disposition_headers = content_disposition_headers
 
 def _normalize_upload_content_type(filename: str, content_type: str | None) -> str:
-    """Prefer the browser MIME type, but recover known types from filename when generic."""
+    """优先使用浏览器上报的 MIME 类型，必要时再根据文件名兜底推断。"""
     normalized = (content_type or "").strip().lower()
     if normalized and normalized != "application/octet-stream":
         return normalized
@@ -55,7 +55,7 @@ def _normalize_upload_content_type(filename: str, content_type: str | None) -> s
 
 
 async def _spill_upload_to_tempfile(file: UploadFile, tmp_path: Path | None = None) -> Path:
-    """Stream uploads to a temporary file so under-limit files are not buffered in memory."""
+    """把上传流边读边写入临时文件，避免整文件常驻内存。"""
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
     temp_root = tmp_path or (settings.data_dir / "tmp_uploads")
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -94,7 +94,7 @@ async def list_files(
 
 
 async def _list_files_impl(page: int, limit: int, session: AsyncSession) -> dict:
-    """List all uploaded files with database-level pagination."""
+    """分页列出上传文件，并补齐下载与缩略图访问地址。"""
     svc = FileService(session)
     page = max(1, int(page))
     limit = max(1, min(int(limit), 200))
@@ -131,7 +131,7 @@ async def upload_file(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ) -> FileUploadResponse:
-    """Upload a file (PDF, image, Office doc, etc.)."""
+    """处理单文件上传，并把幂等状态与上传结果保持一致。"""
     svc = FileService(session)
     normalized_content_type = _normalize_upload_content_type(
         file.filename or "unknown",
@@ -189,6 +189,7 @@ async def upload_file(
     try:
         if idempotency_key:
             try:
+                # 幂等哈希绑定文件名、内容类型、大小和内容摘要，避免不同文件误复用同一键。
                 request_hash = build_request_hash(
                     {
                         "filename": file.filename or "unknown",
@@ -230,6 +231,7 @@ async def upload_file(
                 idempotency_key = None
                 idempotency_key_hash = None
 
+        # 只有完成幂等占位后，才真正进入上传流程，避免并发请求重复落盘。
         await _safe_mark_processing({"status": "PROCESSING"})
         record = await svc.upload_from_path(
             filename=file.filename or "unknown",
@@ -274,7 +276,7 @@ async def delete_file(
     file_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
 ):
-    """Delete an uploaded file from DB and disk."""
+    """删除上传文件，并尽量同时清理数据库记录与磁盘目录。"""
     svc = FileService(session)
     try:
         record = await svc.get(file_id)
@@ -295,6 +297,7 @@ async def delete_file(
         metadata_delete_failed = True
         logger.warning("Failed to delete DB record for %s; removing storage only", file_id, exc_info=True)
     if file_dir.exists():
+        # 即使数据库删除失败，也尽量先移除磁盘文件，避免用户看到“删除成功但仍可下载”。
         try:
             shutil.rmtree(file_dir, ignore_errors=False)
         except OSError:
@@ -318,7 +321,7 @@ async def download_file(
     inline: bool = Query(False, description="Return with inline Content-Disposition for preview"),
     session: AsyncSession = Depends(get_session),
 ):
-    """Download an uploaded file."""
+    """下载上传文件，支持以内联模式返回给浏览器预览。"""
     svc = FileService(session)
     record = await svc.get(file_id)
     path = _resolve_storage_path(record.storage_path)
@@ -342,7 +345,7 @@ async def get_page_image(
     page: int,
     session: AsyncSession = Depends(get_session),
 ):
-    """Render a specific PDF page as a JPG thumbnail."""
+    """把指定 PDF 页面渲染成 JPG 预览图。"""
     svc = FileService(session)
     record = await svc.get(file_id)
 
@@ -395,7 +398,7 @@ async def get_thumbnail(
     file_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
 ):
-    """Return the thumbnail image for an uploaded PDF (JPG)."""
+    """返回上传 PDF 的首页缩略图。"""
     svc = FileService(session)
     record = await svc.get(file_id)
     thumb_path = _resolve_storage_path(record.storage_path).parent / "thumbnail.jpg"

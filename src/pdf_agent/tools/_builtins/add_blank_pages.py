@@ -1,4 +1,4 @@
-"""Add blank pages into a PDF at selected positions."""
+"""在 PDF 指定位置插入空白页。"""
 from __future__ import annotations
 
 from pathlib import Path

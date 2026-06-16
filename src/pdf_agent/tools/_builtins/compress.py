@@ -1,4 +1,4 @@
-"""Compress tool - compress PDF using Ghostscript."""
+"""使用 Ghostscript 压缩 PDF。"""
 from __future__ import annotations
 
 import shutil
@@ -56,7 +56,7 @@ class CompressTool(BaseTool):
         output_path = workdir / localized_output_name(inputs[0], "已压缩")
         src_path = inputs[0]
 
-        # Map compression level to Ghostscript PDF settings
+        # 把压缩等级映射到 Ghostscript 的 PDF 预设
         level_map = {
             "low": "/prepress",
             "medium": "/ebook",

@@ -1,4 +1,4 @@
-"""Reverse pages tool — reverse the page order of a PDF."""
+"""将 PDF 页序整体反转。"""
 from __future__ import annotations
 
 from pathlib import Path

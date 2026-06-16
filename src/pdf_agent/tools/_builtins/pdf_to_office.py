@@ -1,4 +1,4 @@
-"""PDF to Excel/PPT tool — convert PDF to xlsx or pptx via LibreOffice."""
+"""通过 LibreOffice 把 PDF 转成 xlsx 或 pptx。"""
 from __future__ import annotations
 
 import shutil

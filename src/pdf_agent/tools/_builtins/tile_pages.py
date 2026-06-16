@@ -1,4 +1,4 @@
-"""Tile pages tool — combine multiple PDF pages side-by-side or top-to-bottom."""
+"""将多个 PDF 页面按横向或纵向拼贴到一起。"""
 from __future__ import annotations
 
 import io
@@ -70,7 +70,7 @@ class TilePagesTool(BaseTool):
         output_path = workdir / localized_output_name(inputs[0], "已拼接页面")
         direction = params["direction"]
 
-        # Get page dimensions from each PDF
+        # 分别读取每个 PDF 页面的尺寸
         page_dims = []
         for pdf_path in inputs:
             with pikepdf.open(pdf_path) as pdf:

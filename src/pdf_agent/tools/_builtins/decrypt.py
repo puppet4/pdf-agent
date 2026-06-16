@@ -1,4 +1,4 @@
-"""Decrypt tool - remove password protection from a PDF."""
+"""移除 PDF 的密码保护。"""
 from __future__ import annotations
 
 from pathlib import Path

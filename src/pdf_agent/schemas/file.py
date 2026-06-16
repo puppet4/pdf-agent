@@ -1,4 +1,4 @@
-"""File-related schemas."""
+"""文件相关的 Pydantic schema。"""
 from __future__ import annotations
 
 import uuid

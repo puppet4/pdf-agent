@@ -1,4 +1,11 @@
-"""File service - handles file upload and retrieval with validation."""
+"""文件服务层，负责上传文件的校验、持久化与回退读取。
+
+这里既要处理数据库元数据，也要处理磁盘上的真实文件，因此代码里会同时出现：
+- 类型与页数校验；
+- 缩略图生成；
+- 数据库失败时回滚文件系统副本；
+- 数据库不可用时从磁盘索引降级读取。
+"""
 from __future__ import annotations
 
 import io
@@ -25,9 +32,9 @@ logger = logging.getLogger(__name__)
 
 
 class FilePersistenceError(RuntimeError):
-    """Raised when file bytes were written but metadata persistence failed."""
+    """文件已经写入磁盘，但元数据落库失败时抛出的异常。"""
 
-# Magic byte signatures for file type validation
+# 常见文件类型的魔数签名，用于校验上传内容是否真的匹配声明的 MIME 类型。
 _MAGIC_SIGNATURES: dict[str, list[bytes]] = {
     "application/pdf": [b"%PDF"],
     "image/png": [b"\x89PNG\r\n\x1a\n"],
@@ -38,7 +45,7 @@ _MAGIC_SIGNATURES: dict[str, list[bytes]] = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [b"PK\x03\x04"],
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [b"PK\x03\x04"],
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": [b"PK\x03\x04"],
-    # Legacy Office (OLE2)
+    # 旧版 Office 二进制格式使用 OLE2 容器。
     "application/msword": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"],
     "application/vnd.ms-excel": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"],
     "application/vnd.ms-powerpoint": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"],
@@ -52,7 +59,7 @@ _OOXML_PREFIXES: dict[str, str] = {
 
 
 def _validate_magic_bytes(content: bytes, declared_mime: str) -> bool:
-    """Check if file content matches the declared MIME type's magic bytes."""
+    """根据魔数判断文件内容是否匹配声明的 MIME 类型。"""
     if declared_mime == "image/webp":
         return content.startswith(b"RIFF") and content[8:12] == b"WEBP"
     sigs = _MAGIC_SIGNATURES.get(declared_mime)
@@ -62,7 +69,7 @@ def _validate_magic_bytes(content: bytes, declared_mime: str) -> bool:
 
 
 def _validate_office_container(content: bytes, declared_mime: str) -> bool:
-    """Validate OOXML ZIP contents so arbitrary ZIP files cannot masquerade as Office docs."""
+    """校验 OOXML ZIP 容器结构，防止普通 ZIP 文件伪装成 Office 文档。"""
     required_prefix = _OOXML_PREFIXES.get(declared_mime)
     if not required_prefix:
         return True
@@ -74,7 +81,7 @@ def _validate_office_container(content: bytes, declared_mime: str) -> bool:
 
 
 def _validate_declared_content(content: bytes, declared_mime: str) -> bool:
-    """Validate both magic bytes and container structure where applicable."""
+    """组合校验魔数与容器结构。"""
     return _validate_magic_bytes(content, declared_mime) and _validate_office_container(content, declared_mime)
 
 
@@ -98,7 +105,7 @@ def _validate_declared_content_path(path: Path, declared_mime: str) -> bool:
 
 
 def _generate_thumbnail(pdf_path: Path, thumb_path: Path, size: int = 200) -> bool:
-    """Generate a thumbnail for the first page of a PDF using poppler pdftoppm."""
+    """使用 `pdftoppm` 为 PDF 首页生成缩略图。"""
     pdftoppm = shutil.which("pdftoppm")
     if not pdftoppm:
         return False
@@ -113,12 +120,12 @@ def _generate_thumbnail(pdf_path: Path, thumb_path: Path, size: int = 200) -> bo
             detail = result.stderr.decode("utf-8", errors="ignore").strip() or "unknown error"
             logger.warning("pdftoppm failed while generating thumbnail for %s: %s", pdf_path, detail)
             return False
-        # pdftoppm outputs file as <stem>-1.jpg
+        # `pdftoppm` 默认会生成 `<文件名前缀>-1.jpg` 这种命名格式。
         candidate = thumb_path.with_name(thumb_path.stem + "-1.jpg")
         if candidate.exists():
             candidate.rename(thumb_path)
             return True
-        # Try without page suffix
+        # 某些平台或参数组合下可能直接输出目标文件名，这里兼容两种情况。
         if thumb_path.exists():
             return True
         return False
@@ -128,11 +135,13 @@ def _generate_thumbnail(pdf_path: Path, thumb_path: Path, size: int = 200) -> bo
 
 
 def _guess_mime_type(path: Path) -> str:
+    """根据文件名猜测 MIME 类型，失败时回退为通用二进制类型。"""
     guessed, _ = mimetypes.guess_type(path.name)
     return guessed or "application/octet-stream"
 
 
 def _load_page_count(path: Path, mime_type: str) -> int | None:
+    """在文件是 PDF 时尝试读取页数，失败时仅记录日志。"""
     if mime_type != "application/pdf":
         return None
     try:
@@ -144,6 +153,7 @@ def _load_page_count(path: Path, mime_type: str) -> int | None:
 
 
 def _find_storage_file(file_id: uuid.UUID) -> Path | None:
+    """根据上传目录约定查找某个文件 ID 对应的主文件。"""
     upload_dir = settings.upload_dir / str(file_id)
     if not upload_dir.exists():
         return None
@@ -155,6 +165,7 @@ def _find_storage_file(file_id: uuid.UUID) -> Path | None:
 
 
 def _build_storage_record(file_id: uuid.UUID, path: Path) -> FileRecord:
+    """从磁盘文件即时构造一条可替代数据库记录的 `FileRecord`。"""
     mime_type = _guess_mime_type(path)
     stat = path.stat()
     return FileRecord(
@@ -171,6 +182,7 @@ def _build_storage_record(file_id: uuid.UUID, path: Path) -> FileRecord:
 
 
 def load_storage_record(file_id: uuid.UUID) -> FileRecord | None:
+    """在数据库不可用时，从磁盘目录重建单个文件记录。"""
     path = _find_storage_file(file_id)
     if path is None:
         return None
@@ -178,6 +190,7 @@ def load_storage_record(file_id: uuid.UUID) -> FileRecord | None:
 
 
 def list_storage_records() -> list[FileRecord]:
+    """扫描上传目录，并尽量还原全部文件记录。"""
     records: list[FileRecord] = []
     if not settings.upload_dir.exists():
         return records
@@ -196,10 +209,13 @@ def list_storage_records() -> list[FileRecord]:
 
 
 class FileService:
+    """封装上传文件的持久化与读取流程。"""
+
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def _cleanup_removed_upload_records(self, upload_ids: list[str]) -> int:
+        """同步删除已被 LRU 清理掉的上传目录对应的数据库记录。"""
         parsed_ids: list[uuid.UUID] = []
         for upload_id in upload_ids:
             try:
@@ -217,6 +233,7 @@ class FileService:
         return len(records)
 
     async def upload(self, filename: str, content_type: str, content: bytes) -> FileRecord:
+        """把内存中的上传内容先落到临时文件，再复用基于路径的上传流程。"""
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(delete=False, dir=settings.data_dir) as tmp:
             tmp.write(content)
@@ -238,6 +255,11 @@ class FileService:
         *,
         idempotency_key_hash: str | None = None,
     ) -> FileRecord:
+        """从临时文件完成一次上传。
+
+        这里会按顺序执行容量控制、内容校验、PDF 页数检查、磁盘落盘、
+        缩略图生成以及数据库元数据写入。任一步失败都要保证状态可回滚。
+        """
         trim_result = storage.trim_storage_lru_details(include_conversations=False, include_uploads=True)
         if trim_result.removed_upload_ids:
             try:
@@ -245,7 +267,7 @@ class FileService:
             except Exception:
                 await self.session.rollback()
                 logger.warning("Failed to sync upload records after LRU trim", exc_info=True)
-        # Validate size
+        # 先做容量校验，尽量在进入更昂贵的文件解析前快速失败。
         max_bytes = settings.max_upload_size_mb * 1024 * 1024
         size_bytes = temp_path.stat().st_size
         storage_limit = storage.storage_limit_bytes()
@@ -258,7 +280,7 @@ class FileService:
         if size_bytes > max_bytes:
             raise PDFAgentError(ErrorCode.FILE_TOO_LARGE, f"File exceeds {settings.max_upload_size_mb}MB limit")
 
-        # Validate magic bytes
+        # 再校验文件头与容器结构，防止只改扩展名就绕过格式检查。
         if not _validate_declared_content_path(temp_path, content_type):
             raise PDFAgentError(
                 ErrorCode.UNSUPPORTED_FORMAT,
@@ -277,7 +299,7 @@ class FileService:
                             f"PDF exceeds {settings.max_page_count} page limit",
                         )
             except pikepdf.PasswordError:
-                # Encrypted PDFs are valid inputs for flows like decrypt.
+                # 加密 PDF 仍然可能用于解密等流程，因此允许上传，只是暂时拿不到页数。
                 logger.info("Uploaded PDF %s is encrypted; accepting it without page count", filename)
                 page_count = None
             except PDFAgentError:
@@ -291,7 +313,7 @@ class FileService:
         path = storage.save_upload_from_path(file_id, filename, temp_path)
         sha256 = storage.compute_sha256_file(path)
 
-        # Generate thumbnail for PDFs
+        # 缩略图生成失败不会阻断上传成功，只影响预览能力。
         thumb_path = path.parent / "thumbnail.jpg"
         if content_type == "application/pdf":
             _generate_thumbnail(path, thumb_path)
@@ -329,6 +351,7 @@ class FileService:
         return record
 
     async def list_records(self) -> list[FileRecord]:
+        """优先从数据库读取文件列表，失败时降级为磁盘扫描。"""
         try:
             result = await self.session.execute(select(FileRecord).order_by(FileRecord.created_at.desc()))
             return list(result.scalars().all())
@@ -337,6 +360,7 @@ class FileService:
             return list_storage_records()
 
     async def count_records(self) -> int:
+        """统计文件数量，数据库不可用时退化为扫描磁盘。"""
         from sqlalchemy import func
         try:
             result = await self.session.execute(select(func.count()).select_from(FileRecord))
@@ -346,6 +370,7 @@ class FileService:
             return len(records)
 
     async def list_records_paginated(self, page: int, limit: int) -> list[FileRecord]:
+        """分页读取文件记录，并在数据库不可用时提供兼容退化路径。"""
         offset = (page - 1) * limit
         try:
             result = await self.session.execute(
@@ -358,6 +383,7 @@ class FileService:
             return records[offset:offset + limit]
 
     async def get(self, file_id: uuid.UUID) -> FileRecord:
+        """读取单个文件记录，优先数据库，失败时回退到磁盘。"""
         try:
             result = await self.session.execute(select(FileRecord).where(FileRecord.id == file_id))
             record = result.scalar_one_or_none()
@@ -371,5 +397,6 @@ class FileService:
         return record
 
     async def get_path(self, file_id: uuid.UUID) -> Path:
+        """返回某个文件记录对应的磁盘路径。"""
         record = await self.get(file_id)
         return Path(record.storage_path)

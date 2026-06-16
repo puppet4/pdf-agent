@@ -1,4 +1,4 @@
-"""PDF/A conversion tool — convert PDF to PDF/A archival format via Ghostscript."""
+"""通过 Ghostscript 把 PDF 转成归档格式 PDF/A。"""
 from __future__ import annotations
 
 import shutil
@@ -11,7 +11,7 @@ from pdf_agent.tools.base import BaseTool, ProgressReporter, ToolResult
 from pdf_agent.tools.filenames import localized_output_name
 
 
-# ICC color profile path (bundled with Ghostscript)
+# ICC 颜色配置文件路径，通常随 Ghostscript 一起提供
 _ICC_PROFILE = "/usr/share/ghostscript/iccprofiles/default_rgb.icc"
 _PDFA_DEF_TEMPLATE = """% This is included by pdfaSave.ps
 [ /Title ({title})

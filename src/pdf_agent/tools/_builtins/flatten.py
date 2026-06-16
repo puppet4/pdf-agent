@@ -1,4 +1,4 @@
-"""Flatten tool - flatten PDF form fields and annotations into static content."""
+"""把 PDF 表单域和批注压平成静态内容。"""
 from __future__ import annotations
 
 import shutil

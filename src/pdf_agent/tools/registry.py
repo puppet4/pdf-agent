@@ -1,4 +1,4 @@
-"""Tool Registry - discovers and manages tool plugins."""
+"""工具注册表，负责发现并管理可用工具。"""
 from __future__ import annotations
 
 import logging
@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class ToolRegistry:
-    """Central registry for all available PDF tools."""
+    """全部 PDF 工具的中心注册表。"""
 
     def __init__(self) -> None:
         self._tools: dict[str, BaseTool] = {}
@@ -37,12 +37,12 @@ class ToolRegistry:
         return len(self._tools)
 
 
-# Global registry instance
+# 全局共享的注册表实例
 registry = ToolRegistry()
 
 
 def load_builtin_tools() -> None:
-    """Load all built-in tools into the global registry."""
+    """把全部内建工具加载到全局注册表中。"""
     from pdf_agent.tools._builtins import get_builtin_tools
 
     for tool in get_builtin_tools():

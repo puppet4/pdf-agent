@@ -1,4 +1,4 @@
-"""Page border tool — add a decorative border/background to PDF pages."""
+"""给 PDF 页面添加装饰边框或背景。"""
 from __future__ import annotations
 
 import io
@@ -78,12 +78,12 @@ class PageBorderTool(BaseTool):
                 m = params["margin"]
                 bw = params["border_width"]
 
-                # Background
+                # 先绘制背景层
                 if params["bg_color"]:
                     c.setFillColor(HexColor(params["bg_color"]))
                     c.rect(0, 0, pw, ph, fill=1, stroke=0)
 
-                # Border rectangle
+                # 再绘制边框矩形
                 c.setStrokeColor(HexColor(params["border_color"]))
                 c.setLineWidth(bw)
                 c.rect(m + bw/2, m + bw/2, pw - 2*m - bw, ph - 2*m - bw, fill=0, stroke=1)

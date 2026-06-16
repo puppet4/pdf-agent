@@ -1,4 +1,4 @@
-"""Digital signature tool — visible stamp and optional PKCS#12 cryptographic signing."""
+"""数字签名工具：支持可见签章，并可选执行 PKCS#12 加密签名。"""
 from __future__ import annotations
 
 import io
@@ -62,7 +62,7 @@ class SignatureTool(BaseTool):
     def run(self, inputs: list[Path], params: dict, workdir: Path, reporter: ProgressReporter | None = None) -> ToolResult:
         params = self.validate(params)
 
-        # Identify PDF and signature image
+        # 识别输入中的 PDF 与签章图片
         pdf_path = sig_path = cert_path = None
         for p in inputs:
             if p.suffix.lower() == ".pdf":
@@ -107,7 +107,7 @@ class SignatureTool(BaseTool):
             pw = float(mbox[2]) - float(mbox[0])
             ph = float(mbox[3]) - float(mbox[1])
 
-            # Load signature with opacity
+            # 按透明度要求加载签章图片
             with Image.open(sig_path) as opened_signature:
                 sig_img = opened_signature.convert("RGBA")
             r, g, b, a = sig_img.split()

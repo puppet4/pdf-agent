@@ -1,4 +1,4 @@
-"""Delete tool - delete pages from a PDF by page range."""
+"""按页码范围删除 PDF 页面。"""
 from __future__ import annotations
 
 from pathlib import Path

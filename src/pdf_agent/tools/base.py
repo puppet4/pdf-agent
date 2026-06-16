@@ -1,4 +1,4 @@
-"""Tool plugin system - base classes and result types."""
+"""工具系统的基础抽象与结果类型定义。"""
 from __future__ import annotations
 
 import abc
@@ -11,28 +11,28 @@ from pdf_agent.schemas.tool import ToolManifest
 
 
 class ProgressReporter(Protocol):
-    """Callback for reporting progress within a tool run."""
+    """工具运行过程中用于上报进度的回调协议。"""
     def __call__(self, percent: int, message: str = "") -> None: ...
 
 
 @dataclass
 class ToolResult:
-    """Result returned by a tool's run method."""
+    """工具 `run()` 方法返回的统一结果结构。"""
     output_files: list[Path] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
     log: str = ""
 
 
 class BaseTool(abc.ABC):
-    """Abstract base class for all PDF tools."""
+    """所有 PDF 工具都要继承的抽象基类。"""
 
     @abc.abstractmethod
     def manifest(self) -> ToolManifest:
-        """Return the tool's manifest describing its capabilities."""
+        """返回描述工具能力的 manifest。"""
 
     @abc.abstractmethod
     def validate(self, params: dict) -> dict:
-        """Validate and normalize parameters. Raise ToolError on invalid input."""
+        """校验并规范化参数；输入非法时应抛出 `ToolError`。"""
         ...
 
     @abc.abstractmethod
@@ -43,7 +43,7 @@ class BaseTool(abc.ABC):
         workdir: Path,
         reporter: ProgressReporter | None = None,
     ) -> ToolResult:
-        """Run the tool and return results."""
+        """执行工具主体逻辑并返回结果。"""
         ...
 
     @cached_property

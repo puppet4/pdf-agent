@@ -1,4 +1,4 @@
-"""Office to PDF conversion via LibreOffice headless mode."""
+"""通过 LibreOffice 无头模式把 Office 文档转换为 PDF。"""
 from __future__ import annotations
 
 import shutil

@@ -1,4 +1,4 @@
-"""Main router - aggregates all API routers."""
+"""主路由入口，负责聚合全部 API 子路由。"""
 from __future__ import annotations
 
 from fastapi import APIRouter

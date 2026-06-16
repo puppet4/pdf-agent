@@ -1,4 +1,4 @@
-"""Form fill tool — read AcroForm fields and fill values into a PDF."""
+"""读取 AcroForm 字段，并把给定值写入 PDF 表单。"""
 from __future__ import annotations
 
 import json
@@ -15,7 +15,7 @@ from pdf_agent.tools.filenames import localized_output_name
 
 
 def _get_form_fields(pdf: pikepdf.Pdf) -> dict[str, str]:
-    """Extract AcroForm field names and current values."""
+    """提取 AcroForm 字段名及其当前值。"""
     fields: dict[str, str] = {}
     if Name("/AcroForm") not in pdf.Root:
         return fields
@@ -95,7 +95,7 @@ class FormFillTool(BaseTool):
             existing_fields = _get_form_fields(pdf)
 
             if not params["field_values"]:
-                # Just list available fields
+                # 仅列出当前可用字段，不执行填充
                 return ToolResult(
                     output_files=[],
                     meta={"fields": existing_fields},
@@ -113,7 +113,7 @@ class FormFillTool(BaseTool):
                     f"Unknown form field(s): {', '.join(missing_fields)}",
                 )
 
-            # Fill fields
+            # 开始写入字段值
             if Name("/AcroForm") in pdf.Root:
                 acroform = pdf.Root["/AcroForm"]
                 if Name("/Fields") in acroform:
@@ -124,7 +124,7 @@ class FormFillTool(BaseTool):
                             continue
                         try:
                             field["/V"] = String(params["field_values"][name])
-                            # reset appearance
+                            # 重置外观流，避免显示仍停留在旧值
                             field["/AP"] = pikepdf.Dictionary()
                         except Exception as exc:
                             raise ToolError(

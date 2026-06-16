@@ -1,4 +1,4 @@
-"""Linearize tool — optimize PDF for fast web viewing (linearization)."""
+"""把 PDF 线性化，优化网页端快速预览。"""
 from __future__ import annotations
 
 import shutil

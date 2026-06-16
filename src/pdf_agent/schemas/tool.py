@@ -1,18 +1,18 @@
-"""Tool manifest schemas."""
+"""工具 manifest 使用的 schema 定义。"""
 from __future__ import annotations
 
 from pydantic import BaseModel
 
 
 class ParamSpec(BaseModel):
-    """A single parameter definition in the tool manifest."""
+    """描述工具 manifest 中的单个参数定义。"""
     name: str
     label: str
-    # string | int | float | bool | enum | page_range | file
+    # 支持的参数类型：string / int / float / bool / enum / page_range / file
     type: str
     required: bool = False
     default: str | int | float | bool | None = None
-    # for enum type
+    # 仅在 `enum` 类型下使用的候选值列表
     options: list[str] | None = None
     min: float | None = None
     max: float | None = None
@@ -20,7 +20,7 @@ class ParamSpec(BaseModel):
 
 
 class ToolManifest(BaseModel):
-    """Public manifest describing a tool's capabilities and parameters."""
+    """面向外部的工具 manifest，描述能力、输入输出与参数。"""
     name: str
     label: str
     category: str
@@ -35,10 +35,10 @@ class ToolManifest(BaseModel):
 class ToolInputSpec(BaseModel):
     min: int = 1
     max: int = 1
-    # MIME types
+    # 可接受的 MIME 类型列表
     accept: list[str] = ["application/pdf"]
 
 
 class ToolOutputSpec(BaseModel):
-    # pdf | zip | images | text | json
+    # 输出类型枚举：pdf / zip / images / text / json
     type: str = "pdf"

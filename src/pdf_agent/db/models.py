@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM models for uploaded input files."""
+"""上传文件及相关状态使用的 SQLAlchemy ORM 模型。"""
 from __future__ import annotations
 
 import uuid

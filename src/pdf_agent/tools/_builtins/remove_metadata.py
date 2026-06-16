@@ -1,4 +1,4 @@
-"""Remove metadata tool — strip all metadata from a PDF for privacy."""
+"""移除 PDF 中的全部元数据，以提升隐私性。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -32,17 +32,17 @@ class RemoveMetadataTool(BaseTool):
         removed_fields: list[str] = []
 
         with pikepdf.open(inputs[0]) as pdf:
-            # Clear docinfo
+            # 清空文档信息字典
             if pdf.docinfo:
                 removed_fields = [str(k) for k in pdf.docinfo.keys()]
                 for key in list(pdf.docinfo.keys()):
                     del pdf.docinfo[key]
 
-            # Remove XMP metadata stream
+            # 删除 XMP 元数据流
             if Name("/Metadata") in pdf.Root:
                 del pdf.Root["/Metadata"]
 
-            # Remove creation/modification date from trailer
+            # 从 trailer 中移除创建/修改时间字段
             for date_key in ["/CreationDate", "/ModDate"]:
                 if date_key in pdf.trailer:
                     del pdf.trailer[date_key]

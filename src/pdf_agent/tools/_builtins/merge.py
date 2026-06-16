@@ -1,4 +1,4 @@
-"""Merge tool - combine multiple PDFs into one."""
+"""把多个 PDF 合并成一个文件。"""
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Export pages to ZIP tool — convert each PDF page to an image and package as ZIP."""
+"""把 PDF 每一页导出为图片，并打包成 ZIP。"""
 from __future__ import annotations
 
 import shutil

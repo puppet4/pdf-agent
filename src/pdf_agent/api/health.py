@@ -1,4 +1,4 @@
-"""Enhanced health check — verifies DB, LLM config, and agent readiness."""
+"""增强版健康检查，验证数据库、模型配置和 agent 就绪状态。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
@@ -15,7 +15,7 @@ router = APIRouter(tags=["health"])
 async def healthz(request: Request):
     checks: dict = {"status": "ok"}
 
-    # Database connectivity
+    # 数据库连通性
     try:
         async with async_session_factory() as session:
             await session.execute(text("SELECT 1"))
@@ -24,13 +24,13 @@ async def healthz(request: Request):
         checks["database"] = "error"
         checks["status"] = "degraded"
 
-    # LLM configuration
+    # 模型配置状态
     if settings.openai_api_key:
         checks["llm"] = "configured"
     else:
         checks["llm"] = "not configured"
 
-    # Agent graph readiness
+    # Agent 图是否已就绪
     graph = getattr(request.app.state, "graph", None)
     checkpointer = getattr(request.app.state, "checkpointer", None)
     checks["agent"] = "ready" if graph is not None else "not initialized"
@@ -47,7 +47,7 @@ async def healthz(request: Request):
     checks["legacy_api_compatibility_mode"] = settings.legacy_api_compatibility_mode
     checks["legacy_api_phase"] = settings.legacy_api_phase
 
-    # Tool count
+    # 已加载工具数量
     from pdf_agent.tools.registry import registry
     checks["tools_loaded"] = len(registry)
     checks["runtime"] = "single-process"

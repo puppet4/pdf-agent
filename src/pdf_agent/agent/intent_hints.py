@@ -1,4 +1,4 @@
-"""Heuristic intent normalization for colloquial user requests."""
+"""把口语化用户请求归一化为结构化意图提示。"""
 from __future__ import annotations
 
 import re
@@ -40,7 +40,7 @@ _EXPLICIT_HINTS_RE = re.compile(r"\[Normalized intent hints\]\s*(?P<body>(?:\n?-
 
 
 def build_intent_hints(message: str, selected_inputs: list[FileInfo] | None = None) -> str | None:
-    """Build structured hints for natural-language PDF operations."""
+    """为自然语言 PDF 操作请求生成结构化提示。"""
     explicit_hints = _extract_explicit_hint_block(message)
     if explicit_hints:
         return explicit_hints

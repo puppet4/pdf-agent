@@ -1,4 +1,4 @@
-"""Encrypt tool - encrypt a PDF with password protection."""
+"""为 PDF 添加密码加密保护。"""
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Internationalization — system prompt and UI strings in en/zh."""
+"""国际化文案，包含系统提示词和中英文界面字符串。"""
 from __future__ import annotations
 
 from pdf_agent.config import settings

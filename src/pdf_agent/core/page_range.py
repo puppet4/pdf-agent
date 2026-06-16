@@ -1,12 +1,12 @@
-"""Page range parser.
+"""页码范围解析器。
 
-Syntax:
-  - "all"
-  - "1-3,5,7-9"
-  - "odd" / "even"
-  - Supports "last", "last-2-last"
+支持的语法包括：
+  - `all`
+  - `1-3,5,7-9`
+  - `odd` / `even`
+  - `last`、`last-2-last` 这类尾页表达式
 
-All input is 1-based; output is 0-based indices.
+输入页码从 1 开始，返回值会转换成从 0 开始的索引。
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from pdf_agent.core import ErrorCode, PDFAgentError
 
 
 def parse_page_range(expr: str, total_pages: int) -> list[int]:
-    """Parse a page range expression and return 0-based page indices."""
+    """解析页码范围表达式，并返回从 0 开始的页索引列表。"""
     expr = expr.strip().lower()
     if not expr:
         raise PDFAgentError(ErrorCode.INVALID_PAGE_RANGE, "Empty page range expression")
@@ -50,7 +50,7 @@ def parse_page_range(expr: str, total_pages: int) -> list[int]:
 
 
 def _resolve_last(expr: str, total_pages: int) -> str:
-    """Resolve 'last' keyword: 'last' -> total, 'last-N' -> total-N."""
+    """把 `last` 关键字展开成具体页码，例如 `last` 或 `last-N`。"""
     def _replace(m: re.Match[str]) -> str:
         offset = m.group(1)
         if offset:

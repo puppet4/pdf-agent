@@ -1,4 +1,4 @@
-"""PDF compare tool — highlight differences between two PDFs."""
+"""逐页比较两个 PDF，并高亮显示差异。"""
 from __future__ import annotations
 
 import io
@@ -17,7 +17,7 @@ from pdf_agent.tools.filenames import localized_output_name
 
 
 def _render_page_png(pdf_path: Path, page_idx: int, dpi: int = 72) -> Image.Image | None:
-    """Render a single PDF page to PIL Image using pdftoppm."""
+    """使用 `pdftoppm` 将单页 PDF 渲染成 PIL 图片。"""
     import shutil
     import tempfile
     from pdf_agent.external_commands import run_command
@@ -121,7 +121,7 @@ class CompareTool(BaseTool):
                     continue
 
                 if img1 is None or img2 is None:
-                    # One PDF has this page, other doesn't — fully different
+                    # 某一侧有该页而另一侧没有，整页都视为差异。
                     base = img1 or img2
                     overlay = Image.new("RGBA", base.size, highlight_rgba)
                     base_rgba = base.convert("RGBA")
@@ -130,22 +130,22 @@ class CompareTool(BaseTool):
                     diff_count += 1
                     continue
 
-                # Resize to same size
+                # 先把两张图片调整到相同尺寸后再比较
                 if img1.size != img2.size:
                     img2 = img2.resize(img1.size, Image.LANCZOS)
 
                 diff = ImageChops.difference(img1, img2)
                 threshold = params["sensitivity"]
 
-                # Create highlight mask using PIL operations (fast, no pixel loop)
+                # 使用 PIL 操作生成高亮掩码，避免逐像素循环带来的性能损耗
                 diff_gray = diff.convert("L")
                 mask = diff_gray.point(lambda p: 255 if p > threshold else 0)
 
-                # Create highlight overlay and paste using mask
+                # 生成高亮覆盖层，并按掩码叠加到原图上
                 r, g, b, a = highlight_rgba
                 highlight_color = Image.new("RGBA", img1.size, (r, g, b, a))
                 base_rgba = img1.convert("RGBA")
-                # Expand mask to RGBA for paste
+                # 把掩码扩展为可用于粘贴的透明度通道
                 mask_rgba = mask.convert("L")
                 base_rgba.paste(highlight_color, mask=mask_rgba)
                 result = base_rgba.convert("RGB")
@@ -157,7 +157,7 @@ class CompareTool(BaseTool):
         if not diff_pages:
             raise ToolError(ErrorCode.OUTPUT_GENERATION_FAILED, "Could not render pages for comparison (pdftoppm required)")
 
-        # Build output PDF
+        # 组装最终输出 PDF
         buf = io.BytesIO()
         first = diff_pages[0]
         rest = diff_pages[1:]

@@ -1,4 +1,4 @@
-"""Extract embedded file attachments from a PDF."""
+"""提取 PDF 中嵌入的附件文件。"""
 from __future__ import annotations
 
 from pathlib import Path

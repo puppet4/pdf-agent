@@ -1,4 +1,4 @@
-"""Redact text or regions — overlay opaque rectangles then rasterize to remove underlying text."""
+"""对文本或区域执行脱敏：先盖住目标区域，再栅格化以移除底层文本。"""
 from __future__ import annotations
 
 import json
@@ -69,7 +69,7 @@ class RedactTool(BaseTool):
             if not boxes:
                 raise ToolError(ErrorCode.INVALID_PARAMS, "No redact targets found")
 
-            # Step 1: overlay opaque rectangles
+            # 第一步：叠加不透明矩形覆盖目标区域
             redacted_page_indices: set[int] = set()
             color = black if params["fill_color"] == "black" else white
             for page_index, page in enumerate(pdf.pages, start=1):
@@ -95,11 +95,11 @@ class RedactTool(BaseTool):
                 if reporter:
                     reporter(int(page_index / page_count * 50))
 
-            # Save intermediate PDF with overlays applied
+            # 先保存已叠加遮罩层的中间 PDF
             intermediate_path = workdir / "redact_intermediate.pdf"
             pdf.save(intermediate_path)
 
-        # Step 2: rasterize redacted pages to remove underlying text
+        # 第二步：对已脱敏页面做栅格化，彻底移除底层文字
         content_removed = False
         warning = ""
         gs_bin = shutil.which("gs") or shutil.which("gswin64c") or shutil.which("ghostscript")
@@ -116,7 +116,7 @@ class RedactTool(BaseTool):
                 )
                 content_removed = True
             except Exception as exc:
-                # Fall back to overlay-only if rasterization fails
+                # 如果栅格化失败，则回退为仅视觉遮挡的版本
                 shutil.copy2(intermediate_path, output_path)
                 warning = f"Ghostscript rasterization failed: {exc}. Underlying text may remain searchable."
         else:
@@ -151,14 +151,14 @@ def _rasterize_pages(
     workdir: Path,
     reporter: ProgressReporter | None = None,
 ) -> None:
-    """Rasterize only the redacted pages and reassemble with untouched pages."""
+    """仅栅格化发生脱敏的页面，再与未修改页面重新组装。"""
     with tempfile.TemporaryDirectory(dir=workdir) as tmpdir:
         tmp = Path(tmpdir)
 
-        # Rasterize each redacted page individually at 200 DPI
+        # 以 200 DPI 逐页栅格化需要脱敏的页面
         rasterized_pdfs: dict[int, Path] = {}
         for page_idx in sorted(redacted_pages):
-            # gs uses 1-based
+            # Ghostscript 的页码参数从 1 开始
             page_num = page_idx + 1
             img_prefix = tmp / f"page_{page_num:04d}"
             run_command(
@@ -172,7 +172,7 @@ def _rasterize_pages(
                 check=True,
                 timeout=60,
             )
-            # Convert rasterized image back to PDF page
+            # 把栅格化后的图片重新封装成 PDF 单页
             raster_pdf = tmp / f"page_{page_num:04d}.pdf"
             run_command(
                 [
@@ -190,7 +190,7 @@ def _rasterize_pages(
             if reporter:
                 reporter(50 + int((page_idx + 1) / total_pages * 40))
 
-        # Reassemble into a temp file, then swap into place once writes are complete.
+        # 先在临时文件中重新组装，全部写完后再原子替换到目标位置
         staged_output_path = tmp / "redact_reassembled.pdf"
         with pikepdf.open(input_path) as pdf:
             for page_idx, raster_path in rasterized_pdfs.items():

@@ -1,4 +1,4 @@
-"""Extract tool - extract pages from a PDF by page range."""
+"""按页码范围从 PDF 中提取页面。"""
 from __future__ import annotations
 
 from pathlib import Path
